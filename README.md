@@ -21,7 +21,7 @@ Your data stays on your Mac. There's no account and no cloud.
 You need macOS 12 or newer and Python 3.10+ (`python3 --version`).
 
 ```bash
-git clone <this repo> today-app
+git clone https://github.com/wavymaso/today-app.git
 cd today-app
 ./build.sh --install
 ```
