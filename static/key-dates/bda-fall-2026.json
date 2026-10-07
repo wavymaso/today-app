@@ -1,0 +1,22 @@
+{
+  "title": "BDA · Fall 2026",
+  "description": "Midterms, quizzes, assignments and finals for the fall semester, from the course syllabi matched against the class calendar.",
+  "updated": "2026-10-07",
+  "check": "Professors can move dates. Check Blackboard and the syllabus before relying on them. Spanish groups, rooms and times can differ: untick what isn't yours.",
+  "items": [
+    {"course": "Algorithms & Data Structures", "subject": "A&DS OOP quiz", "date": "2026-10-08", "time": "23:59", "room": "Blackboard", "weight": "part of 10% participation", "notes": "Your last attempt counts."},
+    {"course": "Probability & Statistics", "subject": "P&S individual assignment", "date": "2026-10-14", "time": null, "weight": "15%", "notes": "Mon 12 Oct is a national holiday (no classes)."},
+    {"course": "Algorithms & Data Structures", "subject": "A&DS midterm", "date": "2026-10-15", "time": "11:30", "room": "T-03.04", "weight": "25%", "notes": "Sessions 1-14: Big O, binary search, arrays vs linked lists, selection sort, recursion and the call stack, quicksort, hash tables and collisions, OOP (inheritance, special methods), tree traversals, heaps. Tip: redo labs 1-6 without notes; trace quicksort and heap insertions by hand."},
+    {"course": "Time Series Analysis", "subject": "Time Series midterm", "date": "2026-10-16", "time": "10:00", "room": "T-03.04", "weight": "30%", "notes": "Sessions 1-8: ACF plots, additive vs multiplicative decomposition, Box-Cox, mean/naive/seasonal naive/drift benchmarks, SES and its alpha, Ljung-Box. Know the fpp3 function names."},
+    {"course": "Español Intermedio 1", "subject": "Español midterm", "date": "2026-10-28", "time": "17:30", "room": "Online", "weight": "15%"},
+    {"course": "Mathematics for DM&A", "subject": "Maths Quiz 2", "date": "2026-11-13", "time": "08:30", "weight": "15%", "notes": "Linear algebra."},
+    {"course": "Technology with Impact", "subject": "Technology with Impact test", "date": "2026-11-26", "time": "10:00", "room": "T-16.02", "weight": "40%", "notes": "Closed-book. You write up and diagram your own ecological artefact, so design it in advance."},
+    {"course": "Español Intermedio 1", "subject": "Español oral final", "date": "2026-12-02", "time": "17:30", "room": "Online", "weight": "15%", "minimum": "5", "notes": "Dec 2 is busy: Maths group presentation, Programming demos and a final report due 23:59."},
+    {"course": "Algorithms & Data Structures", "subject": "A&DS final", "date": "2026-12-10", "time": "11:30", "room": "T-05.01", "weight": "30%", "minimum": "3.5"},
+    {"course": "Time Series Analysis", "subject": "Time Series final", "date": "2026-12-11", "time": "14:30", "room": "T-15.03", "weight": "30%"},
+    {"course": "Español Intermedio 1", "subject": "Español written final", "date": "2026-12-12", "time": "14:30", "room": "T-12.02", "weight": "30%", "minimum": "5", "notes": "More than 4 absences bars you from this final."},
+    {"course": "Probability & Statistics", "subject": "P&S final", "date": "2026-12-14", "time": "12:00", "room": "T-17.01", "weight": "25%", "minimum": "3.5", "notes": "12:00-14:50. 3 one-sided A4 formula sheets and a calculator allowed. Missing data, assumptions, PCA, clustering, regression, Lasso/Ridge, trees, logistic regression, discriminant analysis."},
+    {"course": "Programming for DM&A", "subject": "Programming final", "date": "2026-12-16", "time": "11:30", "room": "T-15.02", "weight": "35%", "minimum": "3.5", "notes": "AI isn't allowed for any submission in this course."},
+    {"course": "Mathematics for DM&A", "subject": "Maths final", "date": "2026-12-18", "time": "09:30", "room": "T-03.04", "weight": "40%", "minimum": "3.5", "notes": "Linear algebra: systems, matrices, vector spaces, eigenvalues, inner products."}
+  ]
+}

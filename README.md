@@ -67,6 +67,16 @@ Every part works on its own. Offline, you still see your calendar.
 5. **Focus timer:** tap **Start** on one of today's sessions for a full-screen countdown with pause. When it ends, a chime plays, a notification appears, and the session is marked done. Each session in your calendar also gets an alert (10 minutes before by default; change it in Study preferences), so your phone reminds you too.
 6. **Day to day:** after a session, mark it **Done** or **Missed** (on the brief or in Revision). **Replan** any time: done sessions count, missed ones are made up, and your calendar is updated.
 
+## Key dates for your class
+
+Today comes with the **BDA · Fall 2026** key dates: midterms, quizzes, assignments and finals for Algorithms & Data Structures, Probability & Statistics, Time Series Analysis, Mathematics for DM&A, Programming for DM&A, Technology with Impact and Español Intermedio 1, with times, rooms, weights and minimum grades from the syllabi.
+
+To use them: **Revision → Import key dates → BDA · Fall 2026**, untick any course that isn't yours (Spanish groups and rooms can differ), and tap **Add these dates**. Then set how hard each exam is *for you* (tap **Edit** on it) and tap **Make my plan**. Dates you already have are never changed or added twice.
+
+The list is a plain file, [`static/key-dates/bda-fall-2026.json`](static/key-dates/bda-fall-2026.json). If a date moves, edit it there (or send a pull request) so everyone gets the fix. A list for another class works the same way: copy the file, change the dates, and either add it to that folder or share it and use **Or use a key-dates file** in the import window.
+
+The dates come from the syllabi matched against the class calendar. Professors can move them, so check Blackboard before relying on them.
+
 ## Project layout
 
 ```

@@ -561,6 +561,63 @@ function openExamForm(exam, after) {
   setTimeout(() => f.subject.focus(), 50);
 }
 
+/** Import a class's key dates (shipped with the app, or a .json file someone shares). */
+async function openImport(after) {
+  const lists = await api("/api/revision/key-dates").catch(() => []);
+  const body = document.createElement("div");
+
+  function pick(list) {
+    const courses = [...new Set(list.items.map((i) => i.course || "Other"))];
+    body.innerHTML = `
+      <p class="text-sm text-slate-500 -mt-1">${esc(list.description || "")}</p>
+      ${list.check ? `<p class="text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2 mt-3">${esc(list.check)}</p>` : ""}
+      <p class="label mt-4">Your courses</p>
+      <div class="divide-y divide-slate-100">${courses.map((c) => {
+        const items = list.items.filter((i) => (i.course || "Other") === c);
+        return `<label class="flex items-start gap-3 py-2.5 cursor-pointer">
+          <input type="checkbox" data-course="${esc(c)}" checked class="mt-0.5 rounded border-slate-300">
+          <span class="flex-1 min-w-0"><span class="block text-sm font-medium text-slate-900">${esc(c)}</span>
+            <span class="block text-xs text-slate-500">${items.map((i) => `${esc(i.subject)} · ${fmt.dayMonth.format(parseLocal(i.date + "T00:00"))}`).join(" — ")}</span></span></label>`;
+      }).join("")}</div>
+      <button data-do-import class="btn btn-primary w-full mt-4">Add these dates</button>
+      <p class="text-xs text-slate-400 mt-2 text-center">Dates you already have are left as they are. Nothing goes into your calendar.</p>`;
+    $("[data-do-import]", body).onclick = async () => {
+      const chosen = $$("[data-course]", body).filter((x) => x.checked).map((x) => x.dataset.course);
+      const items = list.items.filter((i) => chosen.includes(i.course || "Other"));
+      if (!items.length) return toast("Pick at least one course", "error");
+      try {
+        const r = await api("/api/revision/import", { method: "POST", body: { items } });
+        closeModal();
+        toast(`Added ${plural(r.added, "date", "dates")}${r.skipped ? `, ${r.skipped} you already had` : ""}. Set how hard each one is for you, then make your plan.`, "ok", 8000);
+        after();
+      } catch (err) { toast(err.message, "error"); }
+    };
+  }
+
+  body.innerHTML = `
+    <p class="text-sm text-slate-500 -mt-1 mb-3">Add a whole semester of exams at once, shared by your class.</p>
+    <div class="space-y-2">${lists.map((l, i) => `
+      <button data-list="${i}" class="w-full text-left card !shadow-none p-4 hover:bg-slate-50">
+        <span class="block font-medium text-slate-900">${esc(l.title)}</span>
+        <span class="block text-xs text-slate-500 mt-0.5">${plural(l.items.length, "date", "dates")}${l.updated ? ` · updated ${esc(l.updated)}` : ""}</span></button>`).join("")
+      || `<p class="text-sm text-slate-400">No lists come with this version of Today.</p>`}</div>
+    <label class="link inline-block mt-4 cursor-pointer">Or use a key-dates file (.json) someone shared…
+      <input type="file" accept=".json,application/json" data-file class="hidden"></label>`;
+  body.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-list]");
+    if (b) { const l = lists[Number(b.dataset.list)]; $("#modal-title").textContent = l.title; pick(l); }
+  });
+  $("[data-file]", body).addEventListener("change", async (e) => {
+    try {
+      const data = JSON.parse(await e.target.files[0].text());
+      if (!Array.isArray(data.items) || !data.items.length) throw new Error("That file has no dates in it");
+      $("#modal-title").textContent = data.title || "Key dates";
+      pick({ title: data.title || "Key dates", description: data.description, check: data.check, items: data.items });
+    } catch (err) { toast(`Couldn't read that file: ${err.message}`, "error"); }
+  });
+  openModal("Import key dates", body);
+}
+
 function examCard(x, synced) {
   const pctDone = Math.min(100, (x.done_minutes / x.target_minutes) * 100);
   const pctPlanned = Math.min(100 - pctDone, (x.planned_minutes / x.target_minutes) * 100);
@@ -658,16 +715,20 @@ async function viewRevision(root, params) {
           <h1 class="display text-3xl font-semibold text-slate-900 mt-4">Plan your revision</h1>
           <p class="text-sm text-slate-500 mt-2 mb-6">Add your exams. Today fits study sessions into the free time in your calendar,
             gives harder subjects more time, and adds a review the day before each exam.</p>
-          <button data-add-exam class="btn btn-primary">Add your first exam</button>
+          <div class="flex flex-col sm:flex-row gap-2 justify-center">
+            <button data-import class="btn btn-primary">Import your class's key dates</button>
+            <button data-add-exam class="btn btn-secondary">Add an exam yourself</button></div>
         </section>`;
       $("[data-add-exam]", root).addEventListener("click", () => openExamForm(null, reload));
+      $("[data-import]", root).addEventListener("click", () => openImport(reload));
       return;
     }
     root.innerHTML = `
       <div class="flex flex-wrap items-end justify-between gap-3 mb-5">
         <div><p class="eyebrow">Revision</p>
           <h1 class="display text-3xl font-semibold text-slate-900 mt-1">${upcomingExams.length ? plural(upcomingExams.length, "exam", "exams") + " ahead" : "All exams done"}</h1></div>
-        <button data-add-exam class="btn btn-secondary">+ Add exam</button>
+        <div class="flex gap-2"><button data-import class="btn btn-ghost">Import key dates</button>
+          <button data-add-exam class="btn btn-secondary">+ Add exam</button></div>
       </div>
       <div class="grid sm:grid-cols-2 gap-4">${st.exams.map((x) => examCard(x, inCalendar)).join("")}</div>
 
@@ -697,6 +758,7 @@ async function viewRevision(root, params) {
       </details>`;
 
     $("[data-add-exam]", root).addEventListener("click", () => openExamForm(null, reload));
+    $("[data-import]", root).addEventListener("click", () => openImport(reload));
     $("[data-plan]", root).addEventListener("click", () => replan());
     $("[data-sync]", root)?.addEventListener("click", async (e) => {
       e.target.disabled = true;

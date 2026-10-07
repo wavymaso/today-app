@@ -204,6 +204,74 @@ def delete_exam(exam_id: int, db: sqlite3.Connection = Depends(get_db)):
     return state(db)
 
 
+# --- shared key dates (e.g. a class's exam calendar) ------------------------------
+
+KEY_DATES_DIR = "key-dates"
+
+
+class KeyDate(BaseModel):
+    course: str | None = Field(None, max_length=80)
+    subject: str = Field(min_length=1, max_length=60)
+    date: Date
+    time: str | None = None
+    room: str | None = Field(None, max_length=60)
+    weight: str | None = Field(None, max_length=60)
+    minimum: str | None = Field(None, max_length=20)
+    notes: str | None = Field(None, max_length=800)
+
+    @field_validator("time")
+    @classmethod
+    def _t(cls, v):
+        return _hm(v)
+
+
+class ImportIn(BaseModel):
+    items: list[KeyDate] = Field(min_length=1, max_length=200)
+
+
+def _key_date_notes(k: KeyDate) -> str | None:
+    parts = [p for p in (k.weight, f"need at least {k.minimum}" if k.minimum else None, k.room) if p]
+    text = ". ".join([", ".join(parts)] if parts else [])
+    if k.notes:
+        text = f"{text}. {k.notes}" if text else k.notes
+    return text[:500] or None
+
+
+@router.get("/key-dates")
+def list_key_dates():
+    """Key-date lists that ship with the app (static/key-dates/*.json)."""
+    import json
+    from .. import config
+    out = []
+    for f in sorted((config.STATIC_DIR / KEY_DATES_DIR).glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            items = [KeyDate(**i).model_dump(mode="json") for i in data["items"]]
+        except Exception as exc:
+            log.warning("Skipping key dates %s: %s", f.name, exc)
+            continue
+        out.append({"id": f.stem, "title": data.get("title", f.stem), "description": data.get("description"),
+                    "check": data.get("check"), "updated": data.get("updated"), "items": items})
+    return out
+
+
+@router.post("/import")
+def import_key_dates(body: ImportIn, db: sqlite3.Connection = Depends(get_db)):
+    """Add key dates as exams. Ones you already have (same name and date) are left alone."""
+    existing = {(r["subject"].lower(), r["date"]) for r in db.execute("SELECT subject, date FROM exams")}
+    added = skipped = 0
+    for k in body.items:
+        if (k.subject.lower(), k.date.isoformat()) in existing:
+            skipped += 1
+            continue
+        db.execute("INSERT INTO exams (subject, date, time, difficulty, notes) VALUES (?, ?, ?, 2, ?)",
+                   (k.subject.strip(), k.date.isoformat(), k.time, _key_date_notes(k)))
+        existing.add((k.subject.lower(), k.date.isoformat()))
+        added += 1
+    db.commit()
+    return {**state(db), "added": added, "skipped": skipped}
+
+
 @router.post("/plan")
 def make_plan(db: sqlite3.Connection = Depends(get_db)):
     """(Re)plan every upcoming session. Done and missed sessions are kept."""

@@ -103,3 +103,31 @@ def test_coming_up_doesnt_say_exam_twice(client):
     add_exam(client, "Statistics", 3)
     titles = [i["title"] for i in client.get("/api/brief?view=today").json()["coming_up"] if i["kind"] == "exam"]
     assert titles == ["OOP quiz", "Statistics exam"]
+
+
+def test_bundled_key_dates_are_valid(client):
+    lists = client.get("/api/revision/key-dates").json()
+    bda = next(l for l in lists if l["id"] == "bda-fall-2026")
+    assert len(bda["items"]) == 14
+    assert len({i["course"] for i in bda["items"]}) == 7
+    assert all(i["subject"] and i["date"] for i in bda["items"])
+
+
+def test_import_key_dates_skips_ones_you_have(client):
+    bda = next(l for l in client.get("/api/revision/key-dates").json() if l["id"] == "bda-fall-2026")
+    # You already have one, with your own difficulty.
+    client.post("/api/revision/exams", json={"subject": "Maths final", "date": "2026-12-18", "difficulty": 3, "hours": 25})
+    spanish = [i for i in bda["items"] if i["course"] != "Español Intermedio 1"]   # someone in another Spanish group
+    r = client.post("/api/revision/import", json={"items": spanish}).json()
+    assert (r["added"], r["skipped"]) == (10, 1)
+    maths = next(x for x in r["exams"] if x["subject"] == "Maths final")
+    assert (maths["difficulty"], maths["hours"]) == (3, 25)          # yours stays as you set it
+    ads = next(x for x in r["exams"] if x["subject"] == "A&DS midterm")
+    assert ads["difficulty"] == 2 and ads["time"] == "11:30" and ads["notes"].startswith("25%, T-03.04. Sessions 1-14")
+    assert client.post("/api/revision/import", json={"items": spanish}).json()["added"] == 0   # importing twice adds nothing
+
+
+def test_import_validation(client):
+    assert client.post("/api/revision/import", json={"items": []}).status_code == 422
+    assert client.post("/api/revision/import", json={"items": [{"subject": "X", "date": "nope"}]}).status_code == 422
+    assert client.post("/api/revision/import", json={"items": [{"subject": "X", "date": "2026-12-01", "time": "9am"}]}).status_code == 422
