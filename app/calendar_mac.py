@@ -17,7 +17,9 @@ from . import config
 log = logging.getLogger("today.calendar")
 
 TAG = "today-app:session:"   # in the notes of events we add, so we only ever touch our own
+OURS = "today-app:"          # any event Today added (revision sessions and life routines)
 REVISION_CALENDAR = "Revision"
+LIFE_CALENDAR = "Life"
 
 
 class CalendarError(RuntimeError):
@@ -117,6 +119,7 @@ class MacCalendar:
                     "calendar_id": e.calendar().calendarIdentifier(),
                     "color": self._hex(e.calendar().color()),
                     "session_id": int(notes.split(TAG, 1)[1].split()[0]) if TAG in notes else None,
+                    "ours": OURS in notes,
                 })
             return sorted(out, key=lambda x: (not x["all_day"], x["start"]))
 
@@ -148,29 +151,32 @@ class MacCalendar:
 
     # --- writing (only our own revision sessions) --------------------------
     def revision_calendar(self) -> dict:
-        """A calendar named "Revision" if there is one or we can make one; otherwise your main calendar."""
+        return self.calendar_named(REVISION_CALENDAR)
+
+    def calendar_named(self, name: str) -> dict:
+        """A calendar with this name if there is one or we can make one; otherwise your main calendar."""
         with self.lock:
             cals = self.store.calendarsForEntityType_(self.ek.EKEntityTypeEvent) or []
             for c in cals:
-                if c.title() == REVISION_CALENDAR and c.allowsContentModifications():
+                if c.title() == name and c.allowsContentModifications():
                     return {"id": c.calendarIdentifier(), "title": c.title(), "separate": True}
             default = self.store.defaultCalendarForNewEvents()
             if default is None:
                 raise CalendarError("No calendar you can add events to was found")
             try:
                 new = self.ek.EKCalendar.calendarForEntityType_eventStore_(self.ek.EKEntityTypeEvent, self.store)
-                new.setTitle_(REVISION_CALENDAR)
+                new.setTitle_(name)
                 new.setSource_(default.source())
                 ok, err = self.store.saveCalendar_commit_error_(new, True, None)
                 if ok:
-                    return {"id": new.calendarIdentifier(), "title": REVISION_CALENDAR, "separate": True}
-                log.info("Couldn't create a Revision calendar (%s); using %s", err, default.title())
+                    return {"id": new.calendarIdentifier(), "title": name, "separate": True}
+                log.info("Couldn't create a %s calendar (%s); using %s", name, err, default.title())
             except Exception as exc:   # some accounts (e.g. Google) don't allow new calendars from the Mac
-                log.info("Couldn't create a Revision calendar (%s); using %s", exc, default.title())
+                log.info("Couldn't create a %s calendar (%s); using %s", name, exc, default.title())
             return {"id": default.calendarIdentifier(), "title": default.title(), "separate": False}
 
     def add_event(self, calendar_id: str, title: str, start: datetime, end: datetime, session_id: int,
-                  notes: str = "", alert_minutes: int = 0) -> str:
+                  notes: str = "", alert_minutes: int = 0, tag: str | None = None) -> str:
         with self.lock:
             ev = self.ek.EKEvent.eventWithEventStore_(self.store)
             if alert_minutes:   # an alert before it starts, on the Mac and the phone
@@ -179,7 +185,7 @@ class MacCalendar:
             ev.setTitle_(title)
             ev.setStartDate_(self._ns(start))
             ev.setEndDate_(self._ns(end))
-            ev.setNotes_(f"{notes}\n\n{TAG}{session_id} (added by the Today app)".strip())
+            ev.setNotes_(f"{notes}\n\n{tag or TAG + str(session_id)} (added by the Today app)".strip())
             ok, err = self.store.saveEvent_span_commit_error_(ev, self.ek.EKSpanThisEvent, True, None)
             if not ok:
                 raise CalendarError(f"Couldn't add the event: {err}")
@@ -192,7 +198,7 @@ class MacCalendar:
             ev = self.store.calendarItemWithIdentifier_(event_id) or (items[0] if items else None)
             if ev is None:
                 return False
-            if TAG not in (ev.notes() or ""):
+            if OURS not in (ev.notes() or ""):
                 log.warning("Refusing to delete event %s: not added by Today", event_id)
                 return False
             ok, _ = self.store.removeEvent_span_commit_error_(ev, self.ek.EKSpanThisEvent, True, None)
@@ -242,19 +248,19 @@ class FakeCalendar:
                         out.append({"id": f"{cal}-{day}-{title}", "title": title, "all_day": False,
                                     "start": datetime.combine(day, time(h1, m1)), "end": datetime.combine(day, time(h2, m2)),
                                     "location": loc, "calendar": "University" if cal == "uni" else "Personal",
-                                    "calendar_id": cal, "color": "#2a78d6" if cal == "uni" else "#e87ba4", "session_id": None})
+                                    "calendar_id": cal, "color": "#2a78d6" if cal == "uni" else "#e87ba4", "session_id": None, "ours": False})
         for offset, who in ((2, "Lucía"), (5, "Mum")):
             day = self.today + timedelta(days=offset)
             out.append({"id": f"bday-{who}", "title": f"{who}'s Birthday", "all_day": True,
                         "start": datetime.combine(day, time(0)), "end": datetime.combine(day + timedelta(days=1), time(0)),
-                        "location": None, "calendar": "Birthdays", "calendar_id": "birthdays", "color": "#8295af", "session_id": None})
+                        "location": None, "calendar": "Birthdays", "calendar_id": "birthdays", "color": "#8295af", "session_id": None, "ours": False})
         for offset, title in ((9, "Statistics midterm"), (16, "Microeconomics exam"), (5, "Marketing essay due")):
             day = self.today + timedelta(days=offset)
             out.append({"id": f"uni-{title}", "title": title, "all_day": offset == 5,
                         "start": datetime.combine(day, time(9, 0) if offset != 5 else time(0)),
                         "end": datetime.combine(day, time(11, 0)) if offset != 5 else datetime.combine(day + timedelta(days=1), time(0)),
                         "location": "Aula Magna" if offset != 5 else None, "calendar": "University", "calendar_id": "uni",
-                        "color": "#2a78d6", "session_id": None})
+                        "color": "#2a78d6", "session_id": None, "ours": False})
         return out + list(self.added.values())
 
     def events(self, start: datetime, end: datetime, calendar_ids: list[str] | None = None) -> list[dict]:
@@ -272,14 +278,19 @@ class FakeCalendar:
         ] if r["due"] < until]
 
     def revision_calendar(self) -> dict:
-        return {"id": "revision", "title": REVISION_CALENDAR, "separate": True}
+        return self.calendar_named(REVISION_CALENDAR)
 
-    def add_event(self, calendar_id, title, start, end, session_id, notes="", alert_minutes=0) -> str:
+    def calendar_named(self, name: str) -> dict:
+        return {"id": name.lower(), "title": name, "separate": True}
+
+    def add_event(self, calendar_id, title, start, end, session_id, notes="", alert_minutes=0, tag=None) -> str:
         self._n += 1
         ident = f"fake-{self._n}"
+        life = bool(tag and "life" in tag)
         self.added[ident] = {"id": ident, "title": title, "start": start, "end": end, "all_day": False, "location": None,
-                             "calendar": REVISION_CALENDAR, "calendar_id": calendar_id, "color": "#8b5cf6",
-                             "session_id": session_id, "alert_minutes": alert_minutes}
+                             "calendar": LIFE_CALENDAR if life else REVISION_CALENDAR, "calendar_id": calendar_id,
+                             "color": "#64748b" if life else "#8b5cf6",
+                             "session_id": None if life else session_id, "alert_minutes": alert_minutes, "ours": True}
         return ident
 
     def delete_event(self, event_id: str) -> bool:

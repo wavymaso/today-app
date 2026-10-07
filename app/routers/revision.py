@@ -8,7 +8,9 @@ from datetime import datetime, time, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
-from .. import planner
+import json
+
+from .. import life, planner
 from ..calendar_mac import CalendarError, get_calendar
 from ..db import get_db, get_setting, set_setting
 
@@ -151,9 +153,138 @@ def state(db: sqlite3.Connection, now: datetime | None = None) -> dict:
         (since,))]
     for s in sessions:
         s["past"] = s["end"] <= now.isoformat(timespec="minutes")
-    return {"settings": settings, "exams": exams, "sessions": sessions,
+    routines = [_routine_out(r) for r in db.execute("SELECT * FROM routines ORDER BY id")]
+    life_events = [dict(r) for r in db.execute(
+        "SELECT l.*, r.title, r.location FROM life_events l JOIN routines r ON r.id = l.routine_id WHERE l.start >= ? ORDER BY l.start",
+        (now.date().isoformat(),))]
+    return {"settings": settings, "exams": exams, "sessions": sessions, "routines": routines, "life": life_events,
             "calendar": get_setting(db, "revision_calendar"),
             "to_check": [s for s in sessions if s["past"] and s["status"] == "planned"]}
+
+
+# --- life: routines -----------------------------------------------------------------
+
+class RoutineIn(BaseModel):
+    title: str = Field(min_length=1, max_length=60)
+    kind: str
+    minutes: int = Field(60, ge=15, le=480)
+    days: list[int] = []
+    at: str | None = None
+    per_week: int = Field(3, ge=1, le=7)
+    part: str = "any"
+    location: str | None = Field(None, max_length=80)
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v):
+        if v not in ("fixed", "flexible"):
+            raise ValueError("kind is fixed or flexible")
+        return v
+
+    @field_validator("part")
+    @classmethod
+    def _part(cls, v):
+        if v not in life.PARTS:
+            raise ValueError("part is morning, afternoon, evening or any")
+        return v
+
+    @field_validator("days")
+    @classmethod
+    def _days(cls, v):
+        if any(d not in range(7) for d in v):
+            raise ValueError("days are 0 (Monday) to 6 (Sunday)")
+        return sorted(set(v))
+
+    @field_validator("at")
+    @classmethod
+    def _at(cls, v):
+        return _hm(v)
+
+
+def _routine_out(r) -> dict:
+    return {**dict(r), "days": json.loads(r["days"])}
+
+
+def _routines(db: sqlite3.Connection) -> list[life.Routine]:
+    return [life.Routine(r["id"], r["title"], r["kind"], r["minutes"], json.loads(r["days"]),
+                         time.fromisoformat(r["at"]) if r["at"] else None, r["per_week"], r["part"])
+            for r in db.execute("SELECT * FROM routines")]
+
+
+def _check_routine(body: RoutineIn) -> None:
+    if body.kind == "fixed" and (not body.days or not body.at):
+        raise HTTPException(422, "Pick the days and the time")
+
+
+def _future_life(db: sqlite3.Connection, now: datetime, routine_id: int | None = None):
+    sql = "SELECT l.*, r.title, r.location FROM life_events l JOIN routines r ON r.id = l.routine_id WHERE l.start >= ?"
+    params: list = [now.isoformat(timespec="minutes")]
+    if routine_id is not None:
+        sql += " AND l.routine_id = ?"
+        params.append(routine_id)
+    return db.execute(sql + " ORDER BY l.start", params).fetchall()
+
+
+def _remove_life(db: sqlite3.Connection, rows) -> None:
+    cal = get_calendar()
+    for r in rows:
+        if r["event_id"]:
+            try:
+                cal.delete_event(r["event_id"])
+            except Exception as exc:
+                log.info("Couldn't remove event %s: %s", r["event_id"], exc)
+        db.execute("DELETE FROM life_events WHERE id = ?", (r["id"],))
+
+
+def _add_life_to_calendar(db: sqlite3.Connection, rows) -> int:
+    if not rows:
+        return 0
+    cal = get_calendar()
+    target = cal.calendar_named(life_calendar_name())
+    set_setting(db, "life_calendar", target)
+    for r in rows:
+        try:
+            ident = cal.add_event(target["id"], r["title"], datetime.fromisoformat(r["start"]), datetime.fromisoformat(r["end"]),
+                                  r["id"], notes=r["location"] or "", tag=f"today-app:life:{r['id']}")
+        except CalendarError as exc:
+            raise HTTPException(502, str(exc))
+        db.execute("UPDATE life_events SET event_id = ? WHERE id = ?", (ident, r["id"]))
+    return len(rows)
+
+
+def life_calendar_name() -> str:
+    from ..calendar_mac import LIFE_CALENDAR
+    return LIFE_CALENDAR
+
+
+@router.post("/routines", status_code=201)
+def add_routine(body: RoutineIn, db: sqlite3.Connection = Depends(get_db)):
+    _check_routine(body)
+    db.execute("INSERT INTO routines (title, kind, minutes, days, at, per_week, part, location) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+               (body.title.strip(), body.kind, body.minutes, json.dumps(body.days), body.at, body.per_week, body.part,
+                (body.location or "").strip() or None))
+    db.commit()
+    return state(db)
+
+
+@router.put("/routines/{routine_id}")
+def update_routine(routine_id: int, body: RoutineIn, db: sqlite3.Connection = Depends(get_db)):
+    _check_routine(body)
+    if not db.execute("UPDATE routines SET title = ?, kind = ?, minutes = ?, days = ?, at = ?, per_week = ?, part = ?, location = ? WHERE id = ?",
+                      (body.title.strip(), body.kind, body.minutes, json.dumps(body.days), body.at, body.per_week, body.part,
+                       (body.location or "").strip() or None, routine_id)).rowcount:
+        raise HTTPException(404, "Routine not found")
+    db.commit()
+    return state(db)
+
+
+@router.delete("/routines/{routine_id}")
+def delete_routine(routine_id: int, db: sqlite3.Connection = Depends(get_db)):
+    _remove_life(db, _future_life(db, datetime.now(), routine_id))
+    if not db.execute("DELETE FROM routines WHERE id = ?", (routine_id,)).rowcount:
+        raise HTTPException(404, "Routine not found")
+    db.commit()
+    return state(db)
 
 
 # --- endpoints -----------------------------------------------------------------
@@ -280,29 +411,38 @@ def make_plan(db: sqlite3.Connection = Depends(get_db)):
     """(Re)plan every upcoming session. Done and missed sessions are kept."""
     now = datetime.now()
     settings = get_settings(db)
-    exams_rows = db.execute("SELECT * FROM exams WHERE date > ?", (now.date().isoformat(),)).fetchall()
-    if not exams_rows:
-        raise HTTPException(422, "Add an exam first")
+    # Exams later today still count (an evening quiz can get a morning session).
+    exams_rows = db.execute("SELECT * FROM exams WHERE date >= ?", (now.date().isoformat(),)).fetchall()
+    routines = _routines(db)
+    if not exams_rows and not routines:
+        raise HTTPException(422, "Add an exam or a routine first")
     old = _future_planned(db, now)
     _remove(db, old)
+    _remove_life(db, _future_life(db, now))
 
     exams = []
     for x in exams_rows:
         done = sum(_minutes(s) for s in db.execute("SELECT * FROM sessions WHERE exam_id = ? AND status = 'done'", (x["id"],)))
         at = time.fromisoformat(x["time"]) if x["time"] else None
         exams.append(planner.Exam(x["id"], x["subject"], Date.fromisoformat(x["date"]), x["difficulty"], x["hours"], done, at))
-    last = max(e.date for e in exams)
+    # Life first: routines over the coming weeks (at least four), then revision around them.
+    last = max([e.date for e in exams] + [now.date() + timedelta(days=27)])
     busy = [(e["start"], e["end"]) for e in get_calendar().events(now, datetime.combine(last, time(23, 59)))
-            if not e["all_day"] and not e["session_id"]]
+            if not e["all_day"] and not e["session_id"] and not e.get("ours")]
+    for o in life.occurrences(routines, busy, now.date(), last, now, int(settings["break_minutes"])):
+        db.execute("INSERT INTO life_events (routine_id, start, end) VALUES (?, ?, ?)",
+                   (o.routine_id, o.start.isoformat(timespec="minutes"), o.end.isoformat(timespec="minutes")))
+        busy.append((o.start, o.end))
     # Today's sessions already done or missed count as busy too.
     busy += [(datetime.fromisoformat(r["start"]), datetime.fromisoformat(r["end"]))
              for r in db.execute("SELECT * FROM sessions WHERE start >= ?", (now.date().isoformat(),))]
-    result = planner.plan(exams, busy, settings, now)
+    result = planner.plan(exams, busy, settings, now) if exams else planner.Plan()
     for s in result.sessions:
         db.execute("INSERT INTO sessions (exam_id, start, end, kind) VALUES (?, ?, ?, ?)",
                    (s.exam_id, s.start.isoformat(timespec="minutes"), s.end.isoformat(timespec="minutes"), s.kind))
     if settings["synced"]:
         _add_to_calendar(db, _future_planned(db, now))
+        _add_life_to_calendar(db, _future_life(db, now))
     db.commit()
     return {**state(db), "replaced": len(old)}
 
@@ -311,7 +451,8 @@ def make_plan(db: sqlite3.Connection = Depends(get_db)):
 def add_plan_to_calendar(db: sqlite3.Connection = Depends(get_db)):
     now = datetime.now()
     rows = [r for r in _future_planned(db, now) if not r["event_id"]]
-    added = _add_to_calendar(db, rows)
+    added = _add_to_calendar(db, rows) if rows else 0
+    added += _add_life_to_calendar(db, [r for r in _future_life(db, now) if not r["event_id"]])
     s = get_settings(db)
     s["synced"] = True
     set_setting(db, "revision", s)
@@ -329,6 +470,11 @@ def remove_plan_from_calendar(db: sqlite3.Connection = Depends(get_db)):
             if cal.delete_event(r["event_id"]):
                 removed += 1
             db.execute("UPDATE sessions SET event_id = NULL WHERE id = ?", (r["id"],))
+    for r in _future_life(db, datetime.now()):
+        if r["event_id"]:
+            if cal.delete_event(r["event_id"]):
+                removed += 1
+            db.execute("UPDATE life_events SET event_id = NULL WHERE id = ?", (r["id"],))
     s = get_settings(db)
     s["synced"] = False
     set_setting(db, "revision", s)

@@ -39,6 +39,28 @@ CREATE TABLE IF NOT EXISTS top3 (
     PRIMARY KEY (date, position)
 );
 
+-- Life outside studying: routines (gym, football...) and their planned times.
+CREATE TABLE IF NOT EXISTS routines (
+    id          INTEGER PRIMARY KEY,
+    title       TEXT NOT NULL,
+    kind        TEXT NOT NULL CHECK (kind IN ('fixed', 'flexible')),
+    minutes     INTEGER NOT NULL,
+    days        TEXT NOT NULL DEFAULT '[]',   -- fixed: JSON weekdays, 0 = Monday
+    at          TEXT,                         -- fixed: HH:MM
+    per_week    INTEGER NOT NULL DEFAULT 3,   -- flexible
+    part        TEXT NOT NULL DEFAULT 'any',  -- flexible: morning | afternoon | evening | any
+    location    TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS life_events (
+    id          INTEGER PRIMARY KEY,
+    routine_id  INTEGER NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    start       TEXT NOT NULL,
+    end         TEXT NOT NULL,
+    event_id    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_life_start ON life_events(start);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

@@ -67,6 +67,15 @@ Every part works on its own. Offline, you still see your calendar.
 5. **Focus timer:** tap **Start** on one of today's sessions for a full-screen countdown with pause. When it ends, a chime plays, a notification appears, and the session is marked done. Each session in your calendar also gets an alert (10 minutes before by default; change it in Study preferences), so your phone reminds you too.
 6. **Day to day:** after a session, mark it **Done** or **Missed** (on the brief or in Revision). **Replan** any time: done sessions count, missed ones are made up, and your calendar is updated.
 
+## Life outside studying
+
+**Revision → Life** is for the things you do for yourself: the gym, football, a run, calling home. Add one in two ways:
+
+- **Whenever I'm free:** how often (e.g. 3× a week), the best time of day (mornings, afternoons, evenings) and how long. Today picks the days, spreads them out, and finds free time in your calendar.
+- **Same time each week:** the days and the time (e.g. football, Saturdays at 11:00).
+
+Routines are planned **first**, and revision fits around them. They show in the timetable as quieter blocks, and **Add to calendar** puts them in a calendar called **Life** (or your main calendar if your account doesn't allow new ones). As with revision, Today only ever changes or removes events it added.
+
 ## Key dates for your class
 
 Today comes with the **BDA · Fall 2026** key dates: midterms, quizzes, assignments and finals for Algorithms & Data Structures, Probability & Statistics, Time Series Analysis, Mathematics for DM&A, Programming for DM&A, Technology with Impact and Español Intermedio 1, with times, rooms, weights and minimum grades from the syllabi.
