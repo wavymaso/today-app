@@ -132,16 +132,17 @@ const ICON = {
 
 function weatherBlock(w, isTomorrow = false) {
   if (!w || w.error) return `<p class="text-sm text-slate-400">${esc(w?.error || "")}</p>`;
+  // A compact row on phones; a large temperature on wider screens.
   return `
-    <div class="flex items-center gap-3">
-      <span class="text-accent">${svg(ICON[w.icon] || ICON.cloud, "w-9 h-9")}</span>
-      <div>
-        <p class="display text-3xl font-semibold text-slate-900 leading-none">${w.temp}°</p>
-        <p class="text-xs text-slate-500 mt-1">${isTomorrow ? "Tomorrow · " : ""}${esc(w.label)} · ${w.high}° / ${w.low}° · ${esc(w.place)}</p>
+    <div class="flex sm:block items-center gap-4">
+      <div class="flex items-center sm:justify-end gap-3">
+        <span class="text-slate-400">${svg(ICON[w.icon] || ICON.cloud, "w-7 h-7 sm:w-8 sm:h-8")}</span>
+        <span class="display text-4xl sm:text-5xl font-semibold text-slate-900 leading-none tabular">${w.temp}°</span>
       </div>
-    </div>
-    ${w.advice ? `<p class="mt-3 inline-flex items-center gap-1.5 rounded-full bg-accent/10 text-slate-800 text-xs font-medium px-2.5 py-1">
-      ${svg(ICON.umbrella, "w-3.5 h-3.5")}${esc(w.advice)}</p>` : ""}`;
+      <div class="sm:mt-2">
+        <p class="text-sm text-slate-500">${isTomorrow ? "Tomorrow · " : ""}${esc(w.label)} · ${w.high}° / ${w.low}°</p>
+        <p class="text-xs text-slate-400 mt-0.5">${esc(w.place)}</p></div>
+    </div>`;
 }
 
 function sessionButtons(id) {
@@ -177,9 +178,11 @@ function timeline(day, now, isTomorrow = false) {
     }
     const e = it.e;
     const isSession = e.session_id != null;
+    const sess = isSession ? (state.sessions || []).find((x) => x.id === e.session_id) : null;
+    const dot = sess ? examColor(sess.exam_id) : e.color;
     rows.push(`<div class="relative flex gap-4 py-2.5 pl-1 ${e.past ? "opacity-50" : ""}">
       <span class="w-14 shrink-0 text-right tabular text-xs text-slate-500 pt-0.5 leading-tight">${hm(e.start)}<br><span class="text-slate-400">${hm(e.end)}</span></span>
-      <span class="tl-dot" style="background:${esc(e.color)}"></span>
+      <span class="tl-dot" style="background:${esc(dot)}"></span>
       <div class="pl-4 min-w-0 flex-1 flex items-start gap-3">
         <div class="min-w-0 flex-1">
           <p class="font-medium text-slate-900 truncate">${isSession ? `<span class="inline-block align-[-3px] text-accent mr-1">${svg(ICON.book, "w-4 h-4")}</span>` : ""}${esc(e.title.replace(/^📚\s*/, ""))}
@@ -201,15 +204,18 @@ function timeline(day, now, isTomorrow = false) {
 
 function comingUp(items) {
   if (!items.length) return `<p class="text-sm text-slate-400">No exams or deadlines in the next two weeks.</p>`;
-  return `<ul class="space-y-3">${items.slice(0, 6).map((i) => `
-    <li class="flex items-center gap-3">
-      <span class="w-11 shrink-0 text-center rounded-xl py-1 ${i.days <= 3 ? "bg-accent text-on-accent" : "bg-slate-100 text-slate-700"}">
-        <span class="display block text-lg font-semibold leading-none">${i.days}</span>
-        <span class="block text-[10px] leading-none mt-0.5 opacity-80">${i.days === 1 ? "day" : "days"}</span></span>
+  return `<ul class="space-y-3.5">${items.slice(0, 6).map((i) => {
+    const color = i.exam_id ? examColor(i.exam_id) : i.color || "rgb(var(--slate-400))";
+    return `<li class="grid grid-cols-[2.75rem_1fr] items-center gap-3">
+      <span class="text-center">
+        <span class="display block text-2xl font-semibold leading-none tabular ${i.days <= 3 ? "text-accent" : "text-slate-900"}">${i.days}</span>
+        <span class="block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 mt-1">${i.days === 1 ? "day" : "days"}</span></span>
       <span class="min-w-0">
-        <span class="block text-sm font-medium text-slate-900 truncate">${esc(i.title)}</span>
-        <span class="block text-xs text-slate-500">${relDay(i.date)}${i.time ? ` · ${i.time}` : ""}</span></span>
-    </li>`).join("")}</ul>`;
+        <span class="flex items-center gap-2"><span class="w-2 h-2 rounded-full shrink-0" style="background:${color}"></span>
+          <span class="text-sm font-medium text-slate-900 truncate">${esc(i.title)}</span></span>
+        <span class="block text-xs text-slate-500 pl-4 mt-0.5">${relDay(i.date)}${i.time ? ` · ${i.time}` : ""}</span></span>
+    </li>`;
+  }).join("")}</ul>`;
 }
 
 function remindersBlock(rs) {
@@ -239,14 +245,13 @@ function emailBlock(m) {
 
 function budgetBlock(b) {
   if (!b || b.error) return "";
-  const line = b.left_cents == null
-    ? `<p class="display text-2xl font-semibold text-slate-900">${money(b.spent_cents)}</p><p class="text-xs text-slate-500 mt-1">spent this month</p>`
-    : `<p class="display text-2xl font-semibold ${b.left_cents < 0 ? "text-red-600" : "text-slate-900"}">${money(Math.abs(b.left_cents))}</p>
-       <p class="text-xs text-slate-500 mt-1">${b.left_cents < 0 ? "over budget this month" : `left this month · about ${money(b.per_day_cents)} a day`}</p>`;
-  return `<section class="card p-5">
-    <div class="flex items-center justify-between mb-2"><h2 class="eyebrow">Money</h2>
+  const big = b.left_cents == null ? money(b.spent_cents) : money(Math.abs(b.left_cents));
+  const line = b.left_cents == null ? "spent this month" : b.left_cents < 0 ? "over budget this month" : `left this month · about ${money(b.per_day_cents)} a day`;
+  return `<section class="py-6 border-t border-slate-200 first:border-t-0 first:pt-1">
+    <div class="flex items-center justify-between mb-3"><h2 class="eyebrow">Money</h2>
       ${window.pywebview?.api?.open_budget ? `<button data-open-budget class="link text-xs">Open Budget</button>` : ""}</div>
-    ${line}</section>`;
+    <p class="display text-3xl font-semibold tabular ${b.left_cents < 0 ? "text-red-600" : "text-slate-900"}">${big}</p>
+    <p class="text-sm text-slate-500 mt-1">${line}</p></section>`;
 }
 
 function top3Block(t, isTomorrow) {
@@ -255,7 +260,7 @@ function top3Block(t, isTomorrow) {
     ${t.items.map((i) => `<label class="flex items-center gap-2.5">
       <input type="checkbox" data-done="${i.position}" ${i.done ? "checked" : ""} ${i.text ? "" : "disabled"} class="w-4 h-4 rounded-full border-slate-300 shrink-0">
       <input data-text="${i.position}" value="${esc(i.text)}" maxlength="120" placeholder="${["", "The one thing that matters most", "Second", "Third"][i.position]}"
-        class="flex-1 min-w-0 bg-transparent border-0 border-b border-transparent focus:border-slate-200 focus:outline-none text-sm py-1 ${i.done ? "line-through text-slate-400" : "text-slate-800"} placeholder:text-slate-300"></label>`).join("")}
+        class="flex-1 min-w-0 bg-transparent border-0 border-b border-transparent focus:border-slate-200 focus:outline-none text-sm py-1 ${i.done ? "line-through text-slate-400" : "text-slate-800"} placeholder:text-slate-400"></label>`).join("")}
     ${t.leftover.length ? `<div class="pt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">${isTomorrow ? "Still open:" : "From yesterday:"}
       ${t.leftover.map((x) => `<button type="button" data-carry="${esc(x)}" class="rounded-full bg-slate-100 hover:bg-slate-200 px-2.5 py-1 text-slate-700">+ ${esc(x)}</button>`).join("")}</div>` : ""}
   </form>`;
@@ -301,16 +306,21 @@ function birthdaysBlock(list) {
     <span class="text-xs ${b.days === 0 ? "text-accent font-semibold" : "text-slate-400"} shrink-0">${b.days === 0 ? "Today" : b.days === 1 ? "Tomorrow" : fmt.weekday.format(parseLocal(b.date + "T00:00"))}</span></li>`).join("")}</ul>`;
 }
 
+function note(icon, html, strong = false) {
+  return `<p class="flex items-center gap-2 text-sm ${strong ? "text-slate-900 font-medium" : "text-slate-600"}">
+    <span class="${strong ? "text-accent" : "text-slate-400"}">${svg(icon, "w-4 h-4")}</span>${html}</p>`;
+}
+
 function leaveByLine(lb, isTomorrow) {
   if (!lb) return "";
   const soon = !isTomorrow && lb.minutes_until <= 15;
   const when = isTomorrow ? "" : lb.minutes_until <= 0 ? " · leave now" : lb.minutes_until < 120 ? ` · in ${duration(lb.minutes_until)}` : "";
-  return `<p class="mt-3 inline-flex items-center gap-1.5 rounded-full ${soon ? "bg-accent text-on-accent" : "bg-slate-100 text-slate-700"} text-xs font-medium px-2.5 py-1">
-    ${svg(ICON.pin, "w-3.5 h-3.5")}Leave by ${hm(lb.leave)}${isTomorrow ? " tomorrow" : ""} for ${esc(lb.title)}${when}</p>`;
+  return note(ICON.pin, `Leave by <b class="font-semibold text-slate-900 tabular">${hm(lb.leave)}</b>${isTomorrow ? " tomorrow" : ""} for ${esc(lb.title)}${when}`, soon);
 }
 
 function sideCard(id, b, isTomorrow) {
-  const card = (title, body, extra = "") => `<section class="card p-5"><div class="flex items-center justify-between mb-3"><h2 class="eyebrow">${title}</h2>${extra}</div>${body}</section>`;
+  const card = (title, body, extra = "") => `<section class="py-6 border-t border-slate-200 first:border-t-0 first:pt-1">
+    <div class="flex items-center justify-between mb-4"><h2 class="eyebrow">${title}</h2>${extra}</div>${body}</section>`;
   switch (id) {
     case "top3": return b.top3 ? card(isTomorrow ? "Top 3 for tomorrow" : "Top 3 for today", top3Block(b.top3, isTomorrow)) : "";
     case "coming_up": return b.coming_up ? card("Coming up", Array.isArray(b.coming_up) ? comingUp(b.coming_up) : `<p class="text-sm text-slate-400">${esc(b.coming_up.error || "")}</p>`, `<a href="#/revision" class="link text-xs">Revision</a>`) : "";
@@ -331,37 +341,40 @@ async function viewToday(root, params) {
   const toCheck = rev?.to_check || [];
   const todaySessions = (rev?.sessions || []).filter((s) => s.start.slice(0, 10) === b.date && !s.event_id && s.status === "planned");
   state.sessions = rev?.sessions || [];
+  if (rev) assignCourseColors(rev.exams);
+  const umbrella = b.weather?.advice;
   root.innerHTML = `
-    <section class="hero card p-6 sm:p-8">
-      <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-6">
-        <div>
-          <p class="eyebrow">${isTomorrow ? `Tomorrow · ${esc(fmt.long.format(target))}` : esc(fmt.long.format(now))}</p>
-          <h1 class="display text-4xl sm:text-5xl font-semibold text-slate-900 mt-2">${esc(b.greeting)}</h1>
-          <p class="text-sm text-slate-500 mt-2">${isTomorrow ? "Here's tomorrow. " : ""}${summaryLine(b, todaySessions)}</p>
-          ${leaveByLine(b.day?.leave_by, isTomorrow)}
-          ${b.evening_available && now.getHours() >= 19 ? `<p class="mt-3"><a href="#/today?view=${isTomorrow ? "today" : "tomorrow"}" class="link underline-offset-2 underline">${isTomorrow ? "Show today instead" : "Show tomorrow"}</a></p>` : ""}
-        </div>
-        <div class="sm:text-right sm:min-w-[14rem]">${weatherBlock(b.weather, isTomorrow)}</div>
+    <header class="grid sm:grid-cols-[1fr_auto] gap-8 items-end pt-2">
+      <div class="min-w-0">
+        <p class="eyebrow">${isTomorrow ? `Tomorrow · ${esc(fmt.long.format(target))}` : esc(fmt.long.format(now))}</p>
+        <h1 class="display text-5xl sm:text-6xl font-semibold text-slate-900 mt-3 leading-[1.02]">${esc(b.greeting)}.</h1>
+        <p class="text-slate-600 mt-4 leading-relaxed max-w-2xl">${isTomorrow ? "Here's tomorrow. " : ""}${summaryLine(b, todaySessions)}</p>
+        ${b.day?.leave_by || umbrella ? `<div class="mt-4 space-y-1.5">${leaveByLine(b.day?.leave_by, isTomorrow)}${umbrella ? note(ICON.umbrella, esc(umbrella)) : ""}</div>` : ""}
+        ${b.evening_available && now.getHours() >= 19 ? `<a href="#/today?view=${isTomorrow ? "today" : "tomorrow"}" class="link inline-block mt-4 underline underline-offset-4 decoration-slate-300">${isTomorrow ? "Show today instead" : "Show tomorrow"}</a>` : ""}
       </div>
-    </section>
+      <div class="sm:text-right">${weatherBlock(b.weather, isTomorrow)}</div>
+    </header>
 
-    ${toCheck.length ? `<section class="card p-5 mt-4">
+    ${toCheck.length ? `<section class="mt-8 py-4 border-y border-slate-200">
       <h2 class="eyebrow mb-3">How did revision go?</h2>
       <ul class="space-y-2">${toCheck.slice(-4).map((s) => `<li class="flex items-center gap-3 text-sm">
+        <span class="w-2 h-2 rounded-full shrink-0" style="background:${examColor(s.exam_id)}"></span>
         <span class="flex-1 min-w-0 text-slate-800 truncate">${esc(s.subject)}${s.kind === "review" ? " review" : ""}
           <span class="text-slate-400">· ${relDay(s.start)} ${hm(s.start)}–${hm(s.end)}</span></span>${sessionButtons(s.id)}</li>`).join("")}</ul>
     </section>` : ""}
 
-    <div class="grid lg:grid-cols-[1.45fr_1fr] gap-4 mt-4">
-      <section class="card p-5 sm:p-6">
-        <div class="flex items-baseline justify-between mb-4">
-          <h2 class="font-semibold text-slate-900">${isTomorrow ? "Tomorrow" : "Your day"}</h2>
+    <div class="grid lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] gap-x-14 gap-y-4 mt-10">
+      <section>
+        <div class="flex items-baseline justify-between pb-3 mb-2 border-b border-slate-200">
+          <h2 class="eyebrow">${isTomorrow ? "Tomorrow" : "Your day"}</h2>
           ${b.day.events ? `<span class="text-xs text-slate-400">${plural(b.day.events.filter((e) => !e.all_day).length, "event", "events")}</span>` : ""}
         </div>
         ${timeline(b.day, b.now, isTomorrow)}
         ${todaySessions.length ? `<p class="text-xs text-slate-500 mt-3">${plural(todaySessions.length, "revision session", "revision sessions")} planned today (not in your calendar yet). <a href="#/revision" class="underline">See plan</a></p>` : ""}
       </section>
-      <div class="space-y-4">${b.sections.filter((s) => s.on).map((s) => sideCard(s.id, b, isTomorrow)).join("")}</div>
+      <aside class="lg:border-l lg:border-slate-200 lg:pl-10 border-t border-slate-200 pt-4 lg:border-t-0 lg:pt-0">
+        ${b.sections.filter((s) => s.on).map((s) => sideCard(s.id, b, isTomorrow)).join("")}
+      </aside>
     </div>`;
 
   $("[data-allow-calendar]", root)?.addEventListener("click", async () => {
