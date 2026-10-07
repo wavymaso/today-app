@@ -218,7 +218,8 @@ def make_plan(db: sqlite3.Connection = Depends(get_db)):
     exams = []
     for x in exams_rows:
         done = sum(_minutes(s) for s in db.execute("SELECT * FROM sessions WHERE exam_id = ? AND status = 'done'", (x["id"],)))
-        exams.append(planner.Exam(x["id"], x["subject"], Date.fromisoformat(x["date"]), x["difficulty"], x["hours"], done))
+        at = time.fromisoformat(x["time"]) if x["time"] else None
+        exams.append(planner.Exam(x["id"], x["subject"], Date.fromisoformat(x["date"]), x["difficulty"], x["hours"], done, at))
     last = max(e.date for e in exams)
     busy = [(e["start"], e["end"]) for e in get_calendar().events(now, datetime.combine(last, time(23, 59)))
             if not e["all_day"] and not e["session_id"]]

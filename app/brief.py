@@ -101,7 +101,9 @@ def coming_up(conn: sqlite3.Connection, cal, now: datetime, hidden: list[str]) -
                          (today.isoformat(), horizon.isoformat())).fetchall()
     for x in exams:
         d = date.fromisoformat(x["date"])
-        items.append({"title": f"{x['subject']} exam", "date": x["date"], "time": x["time"], "days": (d - today).days,
+        # "Statistics" -> "Statistics exam", but "OOP quiz" stays as it is.
+        title = x["subject"] if DEADLINE_WORDS.search(x["subject"]) else f"{x['subject']} exam"
+        items.append({"title": title, "date": x["date"], "time": x["time"], "days": (d - today).days,
                       "kind": "exam", "exam_id": x["id"]})
     exam_keys = {(x["subject"].lower(), x["date"]) for x in exams}
     events = _visible(cal, datetime.combine(today, time()), datetime.combine(horizon + timedelta(days=1), time()), hidden)

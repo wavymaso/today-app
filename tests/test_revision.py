@@ -96,3 +96,10 @@ def test_sessions_get_an_alert_in_the_calendar(client):
     client.put("/api/revision/settings", json={"alert_minutes": 0})
     client.post("/api/revision/plan")     # replanning re-adds them with the new setting
     assert {e["alert_minutes"] for e in client.fake.added.values()} == {0}
+
+
+def test_coming_up_doesnt_say_exam_twice(client):
+    add_exam(client, "OOP quiz", 2)
+    add_exam(client, "Statistics", 3)
+    titles = [i["title"] for i in client.get("/api/brief?view=today").json()["coming_up"] if i["kind"] == "exam"]
+    assert titles == ["OOP quiz", "Statistics exam"]

@@ -90,3 +90,16 @@ def test_review_moves_off_a_day_off():
     reviews = [s for s in p.sessions if s.kind == "review"]
     assert [r.start.date() for r in reviews] == [date(2026, 10, 16)]
     assert p.shortfall == {}
+
+
+def test_a_late_exam_can_be_studied_for_that_morning():
+    # Quiz due 23:59 tomorrow: sessions tomorrow are fine if they end by 22:29.
+    p = plan([Exam(1, "OOP quiz", date(2026, 10, 8), difficulty=1, hours=3, at=time(23, 59))], [], now=datetime(2026, 10, 7, 20, 0))
+    on_the_day = [s for s in p.sessions if s.start.date() == date(2026, 10, 8)]
+    assert on_the_day and all(s.end <= datetime(2026, 10, 8, 22, 29) for s in on_the_day)
+    assert p.shortfall == {}
+
+
+def test_a_morning_exam_still_gets_nothing_that_day():
+    p = plan([Exam(1, "Stats", date(2026, 10, 9), difficulty=1, at=time(9, 0))], [], now=NOW)
+    assert not [s for s in p.sessions if s.start.date() == date(2026, 10, 9)]

@@ -11,7 +11,9 @@ How it decides, day by day from tomorrow (or later today) until the last exam:
   a day, and no subject gets more than two sessions a day.
 - The last study day before an exam (usually the day before) gets a lighter
   review session for it. The review counts towards the exam's hours.
-- Nothing is planned on the exam's own day for that exam.
+- Nothing is planned on the exam's own day for that exam, unless it's later in
+  the day (from 15:00, like a quiz due at 23:59): then sessions that end at
+  least 90 minutes before it are fine.
 Whatever doesn't fit is reported, so you know when there isn't enough time.
 """
 from __future__ import annotations
@@ -40,6 +42,7 @@ class Exam:
     difficulty: int = 2
     hours: float | None = None      # your own estimate; otherwise from difficulty
     done_minutes: int = 0           # sessions already done
+    at: time | None = None          # exam time, if known
 
     @property
     def needed_minutes(self) -> int:
@@ -96,10 +99,24 @@ def free_intervals(day: date, busy: list[tuple[datetime, datetime]], settings: d
     return [f for f in free if f[1] > f[0]]
 
 
-def _take(free: list[list[datetime]], minutes: int, min_minutes: int, gap: timedelta) -> tuple[datetime, datetime] | None:
-    """Book the earliest slot of `minutes` (or at least `min_minutes`) and remove it from `free`."""
+LATE_EXAM = time(15, 0)
+EXAM_DAY_GAP = timedelta(minutes=90)
+
+
+def _exam_day_cutoff(e: "Exam", day: date) -> datetime | None:
+    """For an exam later in the day, study on the day itself must end by this time."""
+    if e.date == day and e.at and e.at >= LATE_EXAM:
+        return datetime.combine(day, e.at) - EXAM_DAY_GAP
+    return None
+
+
+def _take(free: list[list[datetime]], minutes: int, min_minutes: int, gap: timedelta,
+          before: datetime | None = None) -> tuple[datetime, datetime] | None:
+    """Book the earliest slot of `minutes` (or at least `min_minutes`), ending by `before` if given,
+    and remove it from `free`."""
     for f in free:
-        length = (f[1] - f[0]).total_seconds() / 60
+        end = min(f[1], before) if before else f[1]
+        length = (end - f[0]).total_seconds() / 60
         if length >= min_minutes:
             use = min(minutes, int(length))
             start = f[0]
@@ -130,7 +147,8 @@ def plan(exams: list[Exam], busy: list[tuple[datetime, datetime]], settings: dic
     not_before_today += timedelta(minutes=(-not_before_today.minute) % 15)
 
     last = max(e.date for e in exams)
-    days = [now.date() + timedelta(days=i) for i in range((last - now.date()).days)]
+    # Up to and including the last exam's day (only used for an exam later that day).
+    days = [now.date() + timedelta(days=i) for i in range((last - now.date()).days + 1)]
     study_days = [d for d in days if d.weekday() not in s["days_off"]]
     # The review goes on the last study day before each exam (the day before, unless that's a day off).
     review_day = {e.id: max((d for d in study_days if d < e.date), default=None) for e in exams}
@@ -153,10 +171,15 @@ def plan(exams: list[Exam], busy: list[tuple[datetime, datetime]], settings: dic
                     review[e.id] -= got
                     per_subject[e.id] = 1
                     last_subject = e.id
+            if review_day[e.id] == day:
+                # Review time that didn't fit goes back to ordinary study (e.g. the morning of a late exam).
+                remaining[e.id] += review[e.id]
+                review[e.id] = 0
 
         while budget >= min_session:
-            # Exams still ahead (not today), with hours left.
-            open_exams = [e for e in exams if e.date > day and remaining[e.id] > 0 and per_subject.get(e.id, 0) < 2]
+            # Exams still ahead, with hours left (or later today, see _exam_day_cutoff).
+            open_exams = [e for e in exams if (e.date > day or _exam_day_cutoff(e, day)) and remaining[e.id] > 0
+                          and per_subject.get(e.id, 0) < 2]
             if not open_exams:
                 break
 
@@ -170,8 +193,12 @@ def plan(exams: list[Exam], busy: list[tuple[datetime, datetime]], settings: dic
                 remaining[pick.id] = 0
                 continue
             want = min(session, budget, remaining[pick.id])
-            slot = _take(free, want, min(min_session, want), gap)
+            cutoff = _exam_day_cutoff(pick, day)
+            slot = _take(free, want, min(min_session, want), gap, before=cutoff)
             if not slot:
+                if cutoff:   # no room before that exam today; others may still fit
+                    per_subject[pick.id] = 2
+                    continue
                 break
             got = int((slot[1] - slot[0]).total_seconds() // 60)
             result.sessions.append(Session(pick.id, *slot))
