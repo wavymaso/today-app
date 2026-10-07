@@ -94,7 +94,8 @@ class MacCalendar:
         with self.lock:
             cals = self.store.calendarsForEntityType_(self.ek.EKEntityTypeEvent) or []
             return [{"id": c.calendarIdentifier(), "title": c.title(), "color": self._hex(c.color()),
-                     "writable": bool(c.allowsContentModifications()), "source": c.source().title()} for c in cals]
+                     "writable": bool(c.allowsContentModifications()), "source": c.source().title(),
+                     "birthdays": c.type() == self.ek.EKCalendarTypeBirthday} for c in cals]
 
     def events(self, start: datetime, end: datetime, calendar_ids: list[str] | None = None) -> list[dict]:
         with self.lock:
@@ -169,9 +170,11 @@ class MacCalendar:
             return {"id": default.calendarIdentifier(), "title": default.title(), "separate": False}
 
     def add_event(self, calendar_id: str, title: str, start: datetime, end: datetime, session_id: int,
-                  notes: str = "") -> str:
+                  notes: str = "", alert_minutes: int = 0) -> str:
         with self.lock:
             ev = self.ek.EKEvent.eventWithEventStore_(self.store)
+            if alert_minutes:   # an alert before it starts, on the Mac and the phone
+                ev.addAlarm_(self.ek.EKAlarm.alarmWithRelativeOffset_(-60 * alert_minutes))
             ev.setCalendar_(self._calendar(calendar_id))
             ev.setTitle_(title)
             ev.setStartDate_(self._ns(start))
@@ -215,8 +218,9 @@ class FakeCalendar:
         return {"events": "granted", "reminders": "granted"}
 
     def calendars(self) -> list[dict]:
-        return [{"id": "uni", "title": "University", "color": "#2a78d6", "writable": True, "source": "Demo"},
-                {"id": "personal", "title": "Personal", "color": "#e87ba4", "writable": True, "source": "Demo"}]
+        return [{"id": "uni", "title": "University", "color": "#2a78d6", "writable": True, "source": "Demo", "birthdays": False},
+                {"id": "personal", "title": "Personal", "color": "#e87ba4", "writable": True, "source": "Demo", "birthdays": False},
+                {"id": "birthdays", "title": "Birthdays", "color": "#8295af", "writable": False, "source": "Demo", "birthdays": True}]
 
     def _week(self) -> list[dict]:
         out = []
@@ -239,6 +243,11 @@ class FakeCalendar:
                                     "start": datetime.combine(day, time(h1, m1)), "end": datetime.combine(day, time(h2, m2)),
                                     "location": loc, "calendar": "University" if cal == "uni" else "Personal",
                                     "calendar_id": cal, "color": "#2a78d6" if cal == "uni" else "#e87ba4", "session_id": None})
+        for offset, who in ((2, "Lucía"), (5, "Mum")):
+            day = self.today + timedelta(days=offset)
+            out.append({"id": f"bday-{who}", "title": f"{who}'s Birthday", "all_day": True,
+                        "start": datetime.combine(day, time(0)), "end": datetime.combine(day + timedelta(days=1), time(0)),
+                        "location": None, "calendar": "Birthdays", "calendar_id": "birthdays", "color": "#8295af", "session_id": None})
         for offset, title in ((9, "Statistics midterm"), (16, "Microeconomics exam"), (5, "Marketing essay due")):
             day = self.today + timedelta(days=offset)
             out.append({"id": f"uni-{title}", "title": title, "all_day": offset == 5,
@@ -265,12 +274,12 @@ class FakeCalendar:
     def revision_calendar(self) -> dict:
         return {"id": "revision", "title": REVISION_CALENDAR, "separate": True}
 
-    def add_event(self, calendar_id, title, start, end, session_id, notes="") -> str:
+    def add_event(self, calendar_id, title, start, end, session_id, notes="", alert_minutes=0) -> str:
         self._n += 1
         ident = f"fake-{self._n}"
         self.added[ident] = {"id": ident, "title": title, "start": start, "end": end, "all_day": False, "location": None,
                              "calendar": REVISION_CALENDAR, "calendar_id": calendar_id, "color": "#8b5cf6",
-                             "session_id": session_id}
+                             "session_id": session_id, "alert_minutes": alert_minutes}
         return ident
 
     def delete_event(self, event_id: str) -> bool:

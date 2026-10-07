@@ -86,3 +86,13 @@ def test_exams_show_in_coming_up(client):
     add_exam(client, "Statistics", 4)
     items = client.get("/api/brief").json()["coming_up"]
     assert any(i["kind"] == "exam" and i["title"] == "Statistics exam" and i["days"] == 4 for i in items)
+
+
+def test_sessions_get_an_alert_in_the_calendar(client):
+    add_exam(client, "Statistics", 9)
+    client.post("/api/revision/plan")
+    client.post("/api/revision/calendar")
+    assert {e["alert_minutes"] for e in client.fake.added.values()} == {10}
+    client.put("/api/revision/settings", json={"alert_minutes": 0})
+    client.post("/api/revision/plan")     # replanning re-adds them with the new setting
+    assert {e["alert_minutes"] for e in client.fake.added.values()} == {0}

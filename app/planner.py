@@ -28,6 +28,7 @@ DEFAULTS = {
     "latest": "21:00",
     "days_off": [],             # weekday numbers, 0 = Monday
     "review_minutes": 60,       # the day-before review
+    "alert_minutes": 10,        # calendar alert before each session (0 = none)
 }
 
 

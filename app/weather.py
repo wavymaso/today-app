@@ -5,7 +5,7 @@ import sqlite3
 import time as _time
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config
 
@@ -40,11 +40,12 @@ def find_place(query: str) -> list[dict]:
             for p in _get(url).get("results", [])]
 
 
-def summarize(raw: dict, now: datetime) -> dict:
-    """Turn Open-Meteo's answer into what the brief shows."""
+def summarize(raw: dict, now: datetime, day=None) -> dict:
+    """Turn Open-Meteo's answer into what the brief shows: for today, or for `day` (tomorrow)."""
     cur = raw["current"]
     hourly = raw["hourly"]
-    today = now.date().isoformat()
+    other_day = day is not None and day != now.date()
+    today = (day or now.date()).isoformat()
     hours = []
     for t, temp, rain, code in zip(hourly["time"], hourly["temperature_2m"], hourly["precipitation_probability"], hourly["weather_code"]):
         if t.startswith(today) and 7 <= int(t[11:13]) <= 22:
@@ -52,8 +53,9 @@ def summarize(raw: dict, now: datetime) -> dict:
     daily = raw["daily"]
     i = daily["time"].index(today) if today in daily["time"] else 0
     # Umbrella: a real chance of rain during the hours you're likely out.
-    wet = [h for h in hours if h["hour"] >= now.hour and h["rain"] >= 40]
-    label, icon = CODES.get(cur["weather_code"], ("", "cloud"))
+    wet = [h for h in hours if (other_day or h["hour"] >= now.hour) and h["rain"] >= 40]
+    code = daily["weather_code"][i] if other_day else cur["weather_code"]
+    label, icon = CODES.get(code, ("", "cloud"))
     advice = None
     if wet:
         advice = f"Take an umbrella: rain likely from {wet[0]['hour']:02d}:00"
@@ -62,11 +64,12 @@ def summarize(raw: dict, now: datetime) -> dict:
     elif daily["temperature_2m_min"][i] <= 5:
         advice = "Cold this morning: wrap up"
     return {
-        "temp": round(cur["temperature_2m"]), "label": label, "icon": icon,
+        "temp": round(daily["temperature_2m_max"][i]) if other_day else round(cur["temperature_2m"]), "label": label, "icon": icon,
+        "day": today,
         "high": round(daily["temperature_2m_max"][i]), "low": round(daily["temperature_2m_min"][i]),
         "rain_chance": max((h["rain"] for h in hours), default=0),
         "advice": advice,
-        "hours": [h for h in hours if h["hour"] % 3 == 0 and h["hour"] >= now.hour - 1][:6],
+        "hours": [h for h in hours if h["hour"] % 3 == 0 and (other_day or h["hour"] >= now.hour - 1)][:6],
     }
 
 
@@ -81,21 +84,21 @@ def fetch(place: dict) -> dict:
 
 
 def demo_raw(now: datetime) -> dict:
-    day = now.date().isoformat()
-    hours = [f"{day}T{h:02d}:00" for h in range(24)]
+    days = [(now.date() + timedelta(days=i)).isoformat() for i in range(2)]
+    hours = [f"{d}T{h:02d}:00" for d in days for h in range(24)]
     rain = [0] * 15 + [20, 45, 60, 50, 30, 10, 0, 0, 0]
     return {"current": {"temperature_2m": 19.4, "weather_code": 2},
-            "hourly": {"time": hours, "temperature_2m": [12 + min(h, 15) * 0.6 for h in range(24)],
-                       "precipitation_probability": rain, "weather_code": [2] * 15 + [61] * 5 + [3] * 4},
-            "daily": {"time": [day], "temperature_2m_max": [23], "temperature_2m_min": [12],
-                      "precipitation_probability_max": [60], "weather_code": [61]}}
+            "hourly": {"time": hours, "temperature_2m": [12 + min(h, 15) * 0.6 for h in range(24)] * 2,
+                       "precipitation_probability": rain + [0] * 24, "weather_code": [2] * 15 + [61] * 5 + [3] * 4 + [0] * 24},
+            "daily": {"time": days, "temperature_2m_max": [23, 25], "temperature_2m_min": [12, 13],
+                      "precipitation_probability_max": [60, 5], "weather_code": [61, 0]}}
 
 
-def get(conn: sqlite3.Connection, place: dict | None = None, now: datetime | None = None) -> dict:
+def get(conn: sqlite3.Connection, place: dict | None = None, now: datetime | None = None, day=None) -> dict:
     now = now or datetime.now()
     place = place or DEFAULT_PLACE
     if config.demo():
-        return {**summarize(demo_raw(now), now), "place": place["name"]}
+        return {**summarize(demo_raw(now), now, day), "place": place["name"]}
     key = f"weather:{place['lat']:.3f},{place['lon']:.3f}"
     row = conn.execute("SELECT value, fetched_at FROM cache WHERE key = ?", (key,)).fetchone()
     raw = None
@@ -114,4 +117,4 @@ def get(conn: sqlite3.Connection, place: dict | None = None, now: datetime | Non
                 raw = json.loads(row["value"])   # an older forecast beats none
     if raw is None:
         raise RuntimeError("Weather isn't available right now (offline?)")
-    return {**summarize(raw, now), "place": place["name"]}
+    return {**summarize(raw, now, day), "place": place["name"]}

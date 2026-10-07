@@ -30,6 +30,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions(start);
 
+-- "Top 3 for today": three things you want to get done, per day.
+CREATE TABLE IF NOT EXISTS top3 (
+    date        TEXT NOT NULL,              -- ISO date
+    position    INTEGER NOT NULL CHECK (position BETWEEN 1 AND 3),
+    text        TEXT NOT NULL,
+    done        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (date, position)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

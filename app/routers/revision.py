@@ -36,6 +36,7 @@ class SettingsIn(BaseModel):
     earliest: str | None = None
     latest: str | None = None
     days_off: list[int] | None = None
+    alert_minutes: int | None = Field(None, ge=0, le=120)
 
     _times = field_validator("earliest", "latest")(classmethod(lambda cls, v: _hm(v)))
 
@@ -99,7 +100,8 @@ def _add_to_calendar(db: sqlite3.Connection, rows) -> int:
         try:
             ident = cal.add_event(target["id"], _title(r["subject"], r["kind"]), datetime.fromisoformat(r["start"]),
                                   datetime.fromisoformat(r["end"]), r["id"],
-                                  notes=f"Revision for your {r['subject']} exam on {Date.fromisoformat(r['exam_date']):%d/%m}.")
+                                  notes=f"Revision for your {r['subject']} exam on {Date.fromisoformat(r['exam_date']):%d/%m}.",
+                                  alert_minutes=int(get_settings(db)["alert_minutes"]))
         except CalendarError as exc:
             raise HTTPException(502, str(exc))
         db.execute("UPDATE sessions SET event_id = ? WHERE id = ?", (ident, r["id"]))

@@ -48,8 +48,15 @@ To try it without your own data: `.venv/bin/python run.py --demo`.
 | To do | Reminders due today or tomorrow, and overdue ones from the past week. |
 | Needs a reply | Primary-inbox emails from the last two days written by a person, in conversations you haven't answered. Newsletters and no-reply senders are skipped. Gmail is read-only. |
 | Money | What's left to spend this month, from the Budget app (read-only). |
+| Top 3 | Three things you want to get done today, ticked off as you go. Anything left from yesterday is one tap to carry over. |
+| Birthdays | The coming week, from your Birthdays calendar (even if it's hidden from your day). |
+| Leave-by time | "Leave by 08:25 for Statistics": the first event of the day with a place, minus the travel time you set. |
 
 Every part works on its own. Offline, you still see your calendar.
+
+**Settings → Sections** switches each card on or off and changes their order. Leave-by time and evening mode are switches there too.
+
+**Evening mode:** from 19:00 the brief shows tomorrow: tomorrow's timeline and weather, when to leave, and your Top 3 for tomorrow, so you can plan it the night before. **Show today instead** switches back.
 
 ## Revision
 
@@ -57,7 +64,8 @@ Every part works on its own. Offline, you still see your calendar.
 2. **Study preferences:** most hours a day, session length, the window you study in, a break between things, and days off.
 3. **Make my plan.** Sessions go into free time only, never overlapping your events (with a break around each). The exam that's most behind goes next, subjects are mixed within a day, and no subject gets more than two sessions a day. The last study day before each exam has a shorter review. If there isn't enough time, the exam card says how much doesn't fit.
 4. **Add to calendar** once it looks right. Sessions go into a calendar called **Revision** if your account allows Today to create one, or otherwise into your main calendar marked 📚. Today only ever changes or removes events it added itself.
-5. **Day to day:** after a session, mark it **Done** or **Missed** (on the brief or in Revision). **Replan** any time: done sessions count, missed ones are made up, and your calendar is updated.
+5. **Focus timer:** tap **Start** on one of today's sessions for a full-screen countdown with pause. When it ends, a chime plays, a notification appears, and the session is marked done. Each session in your calendar also gets an alert (10 minutes before by default; change it in Study preferences), so your phone reminds you too.
+6. **Day to day:** after a session, mark it **Done** or **Missed** (on the brief or in Revision). **Replan** any time: done sessions count, missed ones are made up, and your calendar is updated.
 
 ## Project layout
 

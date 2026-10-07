@@ -1,4 +1,5 @@
 """Run Today as a desktop app: the API on a free local port, shown in a native window."""
+import json
 import logging
 import subprocess
 import sys
@@ -22,6 +23,11 @@ class DesktopApi:
 
     def open_budget(self) -> None:
         subprocess.run(["open", "-a", "Budget"], check=False)
+
+    def notify(self, title: str, text: str) -> None:
+        """A macOS notification (used when a focus session ends)."""
+        script = f'display notification {json.dumps(text[:200])} with title {json.dumps(title[:80])} sound name "Glass"'
+        subprocess.run(["osascript", "-e", script], check=False, timeout=5)
 
 
 def setup_logging() -> None:

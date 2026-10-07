@@ -130,14 +130,14 @@ const ICON = {
    Today: the morning brief
    ======================================================================== */
 
-function weatherBlock(w) {
+function weatherBlock(w, isTomorrow = false) {
   if (!w || w.error) return `<p class="text-sm text-slate-400">${esc(w?.error || "")}</p>`;
   return `
     <div class="flex items-center gap-3">
       <span class="text-accent">${svg(ICON[w.icon] || ICON.cloud, "w-9 h-9")}</span>
       <div>
         <p class="display text-3xl font-semibold text-slate-900 leading-none">${w.temp}°</p>
-        <p class="text-xs text-slate-500 mt-1">${esc(w.label)} · ${w.high}° / ${w.low}° · ${esc(w.place)}</p>
+        <p class="text-xs text-slate-500 mt-1">${isTomorrow ? "Tomorrow · " : ""}${esc(w.label)} · ${w.high}° / ${w.low}° · ${esc(w.place)}</p>
       </div>
     </div>
     ${w.advice ? `<p class="mt-3 inline-flex items-center gap-1.5 rounded-full bg-accent/10 text-slate-800 text-xs font-medium px-2.5 py-1">
@@ -150,7 +150,7 @@ function sessionButtons(id) {
     <button data-session="${id}" data-status="missed" class="btn btn-ghost !px-2.5 !py-1 text-xs">Missed</button></span>`;
 }
 
-function timeline(day, now) {
+function timeline(day, now, isTomorrow = false) {
   if (day.error === "no_access") {
     return `<div class="text-center py-8">
       <p class="text-slate-700 font-medium">Today needs to see your calendar</p>
@@ -168,7 +168,7 @@ function timeline(day, now) {
   let nowShown = false;
   const rows = [];
   for (const it of items) {
-    if (!nowShown && it.at >= nowIso && rows.length) { rows.push(`<div class="now-line my-1" aria-label="Now"></div>`); nowShown = true; }
+    if (!isTomorrow && !nowShown && it.at >= nowIso && rows.length) { rows.push(`<div class="now-line my-1" aria-label="Now"></div>`); nowShown = true; }
     if (it.type === "free") {
       rows.push(`<div class="relative flex gap-4 py-2.5 pl-1 text-sm">
         <span class="w-14 shrink-0 text-right tabular text-xs text-slate-400 pt-0.5">${hm(it.f.start)}</span>
@@ -186,10 +186,11 @@ function timeline(day, now) {
             ${e.now ? `<span class="ml-1.5 align-middle rounded-full bg-accent text-on-accent text-[10px] font-semibold px-1.5 py-0.5">NOW</span>` : ""}</p>
           <p class="text-xs text-slate-500 truncate mt-0.5">${e.location ? `${esc(e.location)} · ` : ""}${esc(e.calendar)}</p>
         </div>
-        ${isSession && (e.past || e.now) ? sessionButtons(e.session_id) : ""}
+        ${isSession && e.past ? sessionButtons(e.session_id)
+          : isSession && !isTomorrow ? `<button data-focus="${e.session_id}" class="btn btn-primary !px-3 !py-1 text-xs shrink-0">Start</button>` : ""}
       </div></div>`);
   }
-  if (!nowShown && rows.length && items.length && items.at(-1).at < nowIso) rows.push(`<div class="now-line my-1"></div>`);
+  if (!isTomorrow && !nowShown && rows.length && items.length && items.at(-1).at < nowIso) rows.push(`<div class="now-line my-1"></div>`);
   return `
     ${allDay.length ? `<div class="flex flex-wrap gap-2 mb-3">${allDay.map((e) => `<span class="chip border-slate-200 text-slate-700 !py-1">
       <span class="w-2 h-2 rounded-full" style="background:${esc(e.color)}"></span>${esc(e.title)}</span>`).join("")}</div>` : ""}
@@ -248,20 +249,99 @@ function budgetBlock(b) {
     ${line}</section>`;
 }
 
-async function viewToday(root) {
-  const [b, rev] = await Promise.all([api("/api/brief"), api("/api/revision").catch(() => null)]);
+function top3Block(t, isTomorrow) {
+  if (t.error) return `<p class="text-sm text-slate-400">${esc(t.error)}</p>`;
+  return `<form data-top3 data-date="${t.date}" class="space-y-2">
+    ${t.items.map((i) => `<label class="flex items-center gap-2.5">
+      <input type="checkbox" data-done="${i.position}" ${i.done ? "checked" : ""} ${i.text ? "" : "disabled"} class="w-4 h-4 rounded-full border-slate-300 shrink-0">
+      <input data-text="${i.position}" value="${esc(i.text)}" maxlength="120" placeholder="${["", "The one thing that matters most", "Second", "Third"][i.position]}"
+        class="flex-1 min-w-0 bg-transparent border-0 border-b border-transparent focus:border-slate-200 focus:outline-none text-sm py-1 ${i.done ? "line-through text-slate-400" : "text-slate-800"} placeholder:text-slate-300"></label>`).join("")}
+    ${t.leftover.length ? `<div class="pt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">${isTomorrow ? "Still open:" : "From yesterday:"}
+      ${t.leftover.map((x) => `<button type="button" data-carry="${esc(x)}" class="rounded-full bg-slate-100 hover:bg-slate-200 px-2.5 py-1 text-slate-700">+ ${esc(x)}</button>`).join("")}</div>` : ""}
+  </form>`;
+}
+
+function wireTop3(root) {
+  const f = $("[data-top3]", root);
+  if (!f) return;
+  const save = async () => {
+    const items = [1, 2, 3].map((p) => ({ position: p, text: $(`[data-text="${p}"]`, f).value, done: $(`[data-done="${p}"]`, f).checked }));
+    try { await api("/api/top3", { method: "PUT", body: { date: f.dataset.date, items } }); } catch (err) { toast(err.message, "error"); }
+  };
+  f.addEventListener("submit", (e) => e.preventDefault());
+  f.addEventListener("change", async (e) => {
+    if (e.target.matches("[data-done]")) {
+      $(`[data-text="${e.target.dataset.done}"]`, f).classList.toggle("line-through", e.target.checked);
+      $(`[data-text="${e.target.dataset.done}"]`, f).classList.toggle("text-slate-400", e.target.checked);
+      if (e.target.checked && [1, 2, 3].every((p) => !$(`[data-text="${p}"]`, f).value || $(`[data-done="${p}"]`, f).checked)) toast("All done. Great day.");
+    }
+    if (e.target.matches("[data-text]")) $(`[data-done="${e.target.dataset.text}"]`, f).disabled = !e.target.value.trim();
+    save();
+  });
+  f.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.matches("[data-text]")) { e.preventDefault(); $(`[data-text="${Number(e.target.dataset.text) + 1}"]`, f)?.focus() || e.target.blur(); }
+  });
+  f.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-carry]");
+    if (!b) return;
+    const empty = [1, 2, 3].map((p) => $(`[data-text="${p}"]`, f)).find((i) => !i.value.trim());
+    if (!empty) return toast("Your three are full. Clear one first.", "error");
+    empty.value = b.dataset.carry;
+    $(`[data-done="${empty.dataset.text}"]`, f).disabled = false;
+    b.remove();
+    save();
+  });
+}
+
+function birthdaysBlock(list) {
+  if (list.error) return `<p class="text-sm text-slate-400">${esc(list.error)}</p>`;
+  if (!list.length) return `<p class="text-sm text-slate-400">No birthdays this week.</p>`;
+  return `<ul class="space-y-2">${list.map((b) => `<li class="flex items-center justify-between gap-2 text-sm">
+    <span class="text-slate-800 truncate">${esc(b.name)}</span>
+    <span class="text-xs ${b.days === 0 ? "text-accent font-semibold" : "text-slate-400"} shrink-0">${b.days === 0 ? "Today" : b.days === 1 ? "Tomorrow" : fmt.weekday.format(parseLocal(b.date + "T00:00"))}</span></li>`).join("")}</ul>`;
+}
+
+function leaveByLine(lb, isTomorrow) {
+  if (!lb) return "";
+  const soon = !isTomorrow && lb.minutes_until <= 15;
+  const when = isTomorrow ? "" : lb.minutes_until <= 0 ? " · leave now" : lb.minutes_until < 120 ? ` · in ${duration(lb.minutes_until)}` : "";
+  return `<p class="mt-3 inline-flex items-center gap-1.5 rounded-full ${soon ? "bg-accent text-on-accent" : "bg-slate-100 text-slate-700"} text-xs font-medium px-2.5 py-1">
+    ${svg(ICON.pin, "w-3.5 h-3.5")}Leave by ${hm(lb.leave)}${isTomorrow ? " tomorrow" : ""} for ${esc(lb.title)}${when}</p>`;
+}
+
+function sideCard(id, b, isTomorrow) {
+  const card = (title, body, extra = "") => `<section class="card p-5"><div class="flex items-center justify-between mb-3"><h2 class="eyebrow">${title}</h2>${extra}</div>${body}</section>`;
+  switch (id) {
+    case "top3": return b.top3 ? card(isTomorrow ? "Top 3 for tomorrow" : "Top 3 for today", top3Block(b.top3, isTomorrow)) : "";
+    case "coming_up": return b.coming_up ? card("Coming up", Array.isArray(b.coming_up) ? comingUp(b.coming_up) : `<p class="text-sm text-slate-400">${esc(b.coming_up.error || "")}</p>`, `<a href="#/revision" class="link text-xs">Revision</a>`) : "";
+    case "todo": return b.reminders ? card("To do", remindersBlock(b.reminders)) : "";
+    case "birthdays": return b.birthdays?.length || b.birthdays?.error ? card("Birthdays", birthdaysBlock(b.birthdays)) : "";
+    case "email": return b.email ? card("Needs a reply", emailBlock(b.email)) : "";
+    case "money": return budgetBlock(b.budget);
+    default: return "";
+  }
+}
+
+async function viewToday(root, params) {
+  const want = params?.get("view");
+  const [b, rev] = await Promise.all([api(`/api/brief${want ? `?view=${want}` : ""}`), api("/api/revision").catch(() => null)]);
   const now = parseLocal(b.now);
+  const isTomorrow = b.view === "tomorrow";
+  const target = parseLocal(b.date + "T00:00");
   const toCheck = rev?.to_check || [];
-  const todaySessions = (rev?.sessions || []).filter((s) => s.start.slice(0, 10) === b.now.slice(0, 10) && !s.event_id && s.status === "planned");
+  const todaySessions = (rev?.sessions || []).filter((s) => s.start.slice(0, 10) === b.date && !s.event_id && s.status === "planned");
+  state.sessions = rev?.sessions || [];
   root.innerHTML = `
     <section class="hero card p-6 sm:p-8">
       <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-6">
         <div>
-          <p class="eyebrow">${esc(fmt.long.format(now))}</p>
+          <p class="eyebrow">${isTomorrow ? `Tomorrow · ${esc(fmt.long.format(target))}` : esc(fmt.long.format(now))}</p>
           <h1 class="display text-4xl sm:text-5xl font-semibold text-slate-900 mt-2">${esc(b.greeting)}</h1>
-          <p class="text-sm text-slate-500 mt-2">${summaryLine(b, todaySessions)}</p>
+          <p class="text-sm text-slate-500 mt-2">${isTomorrow ? "Here's tomorrow. " : ""}${summaryLine(b, todaySessions)}</p>
+          ${leaveByLine(b.day?.leave_by, isTomorrow)}
+          ${b.evening_available && now.getHours() >= 19 ? `<p class="mt-3"><a href="#/today?view=${isTomorrow ? "today" : "tomorrow"}" class="link underline-offset-2 underline">${isTomorrow ? "Show today instead" : "Show tomorrow"}</a></p>` : ""}
         </div>
-        <div class="sm:text-right sm:min-w-[14rem]">${weatherBlock(b.weather)}</div>
+        <div class="sm:text-right sm:min-w-[14rem]">${weatherBlock(b.weather, isTomorrow)}</div>
       </div>
     </section>
 
@@ -275,28 +355,13 @@ async function viewToday(root) {
     <div class="grid lg:grid-cols-[1.45fr_1fr] gap-4 mt-4">
       <section class="card p-5 sm:p-6">
         <div class="flex items-baseline justify-between mb-4">
-          <h2 class="font-semibold text-slate-900">Your day</h2>
+          <h2 class="font-semibold text-slate-900">${isTomorrow ? "Tomorrow" : "Your day"}</h2>
           ${b.day.events ? `<span class="text-xs text-slate-400">${plural(b.day.events.filter((e) => !e.all_day).length, "event", "events")}</span>` : ""}
         </div>
-        ${timeline(b.day, b.now)}
+        ${timeline(b.day, b.now, isTomorrow)}
         ${todaySessions.length ? `<p class="text-xs text-slate-500 mt-3">${plural(todaySessions.length, "revision session", "revision sessions")} planned today (not in your calendar yet). <a href="#/revision" class="underline">See plan</a></p>` : ""}
       </section>
-      <div class="space-y-4">
-        <section class="card p-5">
-          <div class="flex items-center justify-between mb-3"><h2 class="eyebrow">Coming up</h2>
-            <a href="#/revision" class="link text-xs">Revision</a></div>
-          ${Array.isArray(b.coming_up) ? comingUp(b.coming_up) : `<p class="text-sm text-slate-400">${esc(b.coming_up.error || "")}</p>`}
-        </section>
-        <section class="card p-5">
-          <h2 class="eyebrow mb-3">To do</h2>
-          ${remindersBlock(b.reminders)}
-        </section>
-        <section class="card p-5">
-          <h2 class="eyebrow mb-2">Needs a reply</h2>
-          ${emailBlock(b.email)}
-        </section>
-        ${budgetBlock(b.budget)}
-      </div>
+      <div class="space-y-4">${b.sections.filter((s) => s.on).map((s) => sideCard(s.id, b, isTomorrow)).join("")}</div>
     </div>`;
 
   $("[data-allow-calendar]", root)?.addEventListener("click", async () => {
@@ -306,14 +371,21 @@ async function viewToday(root) {
   });
   $("[data-open-budget]", root)?.addEventListener("click", () => window.pywebview.api.open_budget());
   wireSessionButtons(root);
+  wireTop3(root);
+  wireFocusButtons(root);
 }
 
 function summaryLine(b, todaySessions) {
   const parts = [];
   const timed = (b.day.events || []).filter((e) => !e.all_day && !e.past);
-  if (timed.length) parts.push(`${plural(timed.length, "thing", "things")} left in your calendar`);
+  if (b.view === "tomorrow") {
+    const all = (b.day.events || []).filter((e) => !e.all_day);
+    parts.push(all.length ? `${plural(all.length, "thing", "things")} in your calendar, starting ${hm(all[0].start)}` : "Nothing in your calendar");
+  } else if (timed.length) parts.push(`${plural(timed.length, "thing", "things")} left in your calendar`);
   else if (b.day.events) parts.push("Nothing else in your calendar");
   const soon = Array.isArray(b.coming_up) ? b.coming_up.find((i) => i.days <= 7) : null;
+  const bday = Array.isArray(b.birthdays) ? b.birthdays.find((x) => x.days === 0) : null;
+  if (bday) parts.push(`${bday.name}'s birthday`);
   if (soon) parts.push(`${soon.title} ${soon.days === 0 ? "today" : soon.days === 1 ? "tomorrow" : `in ${soon.days} days`}`);
   if (b.email?.items?.length) parts.push(plural(b.email.items.length, "email to answer", "emails to answer"));
   return esc(parts.join(" · "));
@@ -328,6 +400,110 @@ function wireSessionButtons(root) {
       b.dataset.status === "missed" ? { label: "Replan", run: () => { location.hash = "#/revision?replan=1"; } } : null);
     render();
   });
+}
+
+/* ===========================================================================
+   Focus timer for a revision session
+   ======================================================================== */
+
+const focus = { session: null, total: 0, left: 0, paused: false, last: 0, timer: null };
+
+function wireFocusButtons(root) {
+  root.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-focus]");
+    if (!b) return;
+    const s = (state.sessions || []).find((x) => x.id === Number(b.dataset.focus));
+    if (s) startFocus(s);
+  });
+}
+
+function chime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [523.25, 659.25, 783.99].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + i * 0.18);
+      g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + i * 0.18 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.18 + 1.2);
+      o.connect(g).connect(ctx.destination); o.start(ctx.currentTime + i * 0.18); o.stop(ctx.currentTime + i * 0.18 + 1.3);
+    });
+  } catch { /* no sound available */ }
+}
+
+function startFocus(s) {
+  const minutes = Math.round((parseLocal(s.end) - parseLocal(s.start)) / 60000);
+  Object.assign(focus, { session: s, total: minutes * 60, left: minutes * 60, paused: false, last: Date.now() });
+  let el = $("#focus");
+  if (!el) { el = document.createElement("div"); el.id = "focus"; document.body.append(el); }
+  el.className = "fixed inset-0 z-50 bg-slate-50 flex items-center justify-center p-6";
+  el.innerHTML = `
+    <div class="text-center max-w-md w-full">
+      <p class="eyebrow">${s.kind === "review" ? "Review" : "Revision"} · ${duration(minutes)}</p>
+      <h1 class="display text-3xl sm:text-4xl font-semibold text-slate-900 mt-2">${esc(s.subject)}</h1>
+      <div class="relative w-64 h-64 mx-auto my-8">
+        <svg viewBox="0 0 100 100" class="w-full h-full -rotate-90">
+          <circle cx="50" cy="50" r="45" fill="none" stroke="rgb(var(--slate-200))" stroke-width="3"/>
+          <circle data-ring cx="50" cy="50" r="45" fill="none" stroke="rgb(var(--accent))" stroke-width="3" stroke-linecap="round"
+                  stroke-dasharray="282.74" stroke-dashoffset="0" style="transition: stroke-dashoffset .5s linear"/></svg>
+        <div class="absolute inset-0 flex flex-col items-center justify-center">
+          <span data-clock class="display text-6xl font-semibold text-slate-900 tabular"></span>
+          <span data-state class="text-xs text-slate-400 mt-1">focus</span></div>
+      </div>
+      <div data-controls class="flex justify-center gap-2">
+        <button data-pause class="btn btn-secondary w-28">Pause</button>
+        <button data-finish class="btn btn-primary w-28">Finish</button>
+      </div>
+      <button data-stop class="link mt-5">Stop without saving</button>
+      <p class="text-xs text-slate-400 mt-6">Phone away, one tab open. You've got this.</p>
+    </div>`;
+  $("[data-pause]", el).onclick = () => {
+    focus.paused = !focus.paused;
+    focus.last = Date.now();
+    $("[data-pause]", el).textContent = focus.paused ? "Resume" : "Pause";
+    $("[data-state]", el).textContent = focus.paused ? "paused" : "focus";
+  };
+  $("[data-finish]", el).onclick = () => endFocus(true);
+  $("[data-stop]", el).onclick = () => endFocus(false);
+  clearInterval(focus.timer);
+  focus.timer = setInterval(tickFocus, 250);
+  tickFocus();
+}
+
+function tickFocus() {
+  const el = $("#focus");
+  if (!el || !focus.session) return;
+  const now = Date.now();
+  if (!focus.paused) focus.left -= (now - focus.last) / 1000;
+  focus.last = now;
+  const left = Math.max(0, Math.ceil(focus.left));
+  $("[data-clock]", el).textContent = `${Math.floor(left / 60)}:${pad(left % 60)}`;
+  $("[data-ring]", el).style.strokeDashoffset = String(282.74 * (1 - left / focus.total));
+  document.title = focus.paused ? "Paused · Today" : `${Math.floor(left / 60)}:${pad(left % 60)} · ${focus.session.subject}`;
+  if (left <= 0) endFocus(true, true);
+}
+
+async function endFocus(done, finished = false) {
+  clearInterval(focus.timer);
+  const s = focus.session;
+  focus.session = null;
+  document.title = "Today";
+  const el = $("#focus");
+  if (done && s) {
+    try { await api(`/api/revision/sessions/${s.id}`, { method: "PATCH", body: { status: "done" } }); } catch (err) { toast(err.message, "error"); }
+    if (finished) {
+      chime();
+      window.pywebview?.api?.notify?.("Session complete", `${s.subject}: nice work. Take a break.`);
+    }
+    el.innerHTML = `<div class="text-center">
+      <span class="inline-flex w-16 h-16 rounded-full bg-accent text-on-accent items-center justify-center">${svg(ICON.check, "w-8 h-8")}</span>
+      <h1 class="display text-3xl font-semibold text-slate-900 mt-5">${finished ? "Session complete" : "Marked as done"}</h1>
+      <p class="text-sm text-slate-500 mt-2">${esc(s.subject)} · take a short break before the next thing.</p>
+      <button data-close class="btn btn-primary mt-6">Back to Today</button></div>`;
+    $("[data-close]", el).onclick = () => { el.remove(); render(); };
+  } else {
+    el?.remove();
+  }
 }
 
 /* ===========================================================================
@@ -432,7 +608,9 @@ function planList(sessions) {
           <span class="tabular text-slate-500 w-[5.5rem] shrink-0">${hm(s.start)}–${hm(s.end)}</span>
           <span class="flex-1 min-w-0 truncate text-slate-800">${esc(s.subject)}${s.kind === "review" ? ` <span class="text-xs text-slate-400">review</span>` : ""}</span>
           ${s.status === "done" ? `<span class="text-xs text-emerald-600">Done</span>` : s.status === "missed" ? `<span class="text-xs text-slate-400">Missed</span>`
-            : s.past ? sessionButtons(s.id) : s.event_id ? `<span class="text-slate-400" title="In your calendar">${svg(ICON.check, "w-4 h-4")}</span>` : ""}
+            : s.past ? sessionButtons(s.id)
+            : s.start.slice(0, 10) === isoDay(new Date()) ? `<button data-focus="${s.id}" class="btn btn-primary !px-3 !py-1 text-xs shrink-0">Start</button>`
+            : s.event_id ? `<span class="text-slate-400" title="In your calendar">${svg(ICON.check, "w-4 h-4")}</span>` : ""}
         </li>`).join("")}</ul>
     </div>`).join("");
 }
@@ -449,6 +627,8 @@ function settingsForm(st) {
         <input name="latest" type="time" class="input" value="${s.latest}"></div></div>
       <div><label class="label">Break between things</label><select name="break_minutes" class="input">
         ${[0, 10, 15, 20, 30].map((m) => `<option value="${m}" ${s.break_minutes === m ? "selected" : ""}>${m ? `${m} min` : "None"}</option>`).join("")}</select></div>
+      <div><label class="label">Alert before each session</label><select name="alert_minutes" class="input">
+        ${[0, 5, 10, 15, 30].map((m) => `<option value="${m}" ${s.alert_minutes === m ? "selected" : ""}>${m ? `${m} min before` : "No alert"}</option>`).join("")}</select></div>
       <div class="sm:col-span-2"><label class="label">Days off</label><div class="flex flex-wrap gap-1.5" data-days>
         ${WEEKDAYS.map((d, i) => `<button type="button" data-day="${i}" class="chip !px-3 !py-1 ${s.days_off.includes(i) ? "bg-accent text-on-accent border-transparent" : "border-slate-200 text-slate-600"}">${d}</button>`).join("")}</div></div>
     </form>`;
@@ -466,6 +646,7 @@ async function viewRevision(root, params) {
   }
 
   function draw() {
+    state.sessions = st.sessions;
     const upcomingExams = st.exams.filter((x) => x.days >= 0);
     const hasPlan = st.sessions.some((s) => !s.past && s.status === "planned");
     const inCalendar = st.settings.synced;
@@ -535,7 +716,7 @@ async function viewRevision(root, params) {
     study.addEventListener("change", (e) => {
       const n = e.target.name;
       if (!n) return;
-      const v = ["hours_per_day"].includes(n) ? Number(e.target.value.replace(",", ".")) : ["session_minutes", "break_minutes"].includes(n) ? Number(e.target.value) : e.target.value;
+      const v = ["hours_per_day"].includes(n) ? Number(e.target.value.replace(",", ".")) : ["session_minutes", "break_minutes", "alert_minutes"].includes(n) ? Number(e.target.value) : e.target.value;
       saveStudy({ [n]: v });
     });
     $("[data-days]", root).addEventListener("click", async (e) => {
@@ -564,6 +745,7 @@ async function viewRevision(root, params) {
     }
   });
   wireSessionButtons(root);
+  wireFocusButtons(root);
   draw();
   if (params.get("replan")) replan();
 }
@@ -685,6 +867,66 @@ async function sectionGmail(el) {
   draw();
 }
 
+const SECTION_INFO = {
+  top3: ["Top 3 for today", "Three things you want to get done, ticked off as you go"],
+  coming_up: ["Coming up", "Exams and deadlines in the next two weeks"],
+  todo: ["To do", "Reminders due today and tomorrow"],
+  birthdays: ["Birthdays", "From your Birthdays calendar, the coming week"],
+  email: ["Needs a reply", "Gmail emails waiting for an answer"],
+  money: ["Money", "What's left this month, from Budget"],
+  leave_by: ["Leave-by time", "When to set off for your first event with a place"],
+  evening: ["Evening mode", "After 19:00, show tomorrow instead of today"],
+};
+const FEATURE_IDS = ["leave_by", "evening"];
+
+async function sectionSections(el) {
+  const draw = () => {
+    const secs = state.prefs.sections;
+    const cards = secs.filter((s) => !FEATURE_IDS.includes(s.id));
+    const toggle = (s) => `<button type="button" role="switch" aria-checked="${s.on}" data-toggle="${s.id}"
+      class="relative w-10 h-6 rounded-full shrink-0 transition ${s.on ? "bg-accent" : "bg-slate-200"}">
+      <span class="absolute top-0.5 ${s.on ? "left-[1.125rem]" : "left-0.5"} w-5 h-5 rounded-full bg-white shadow transition-all"></span></button>`;
+    el.innerHTML = `
+      <p class="text-sm text-slate-500 mb-2">Cards next to your day, in this order. Switch off what you don't need.</p>
+      <div class="divide-y divide-slate-100">${cards.map((s, i) => `
+        <div class="flex items-center gap-3 py-2.5 ${s.on ? "" : "opacity-60"}">
+          <div class="flex-1 min-w-0"><p class="text-sm font-medium text-slate-900">${SECTION_INFO[s.id][0]}</p>
+            <p class="text-xs text-slate-500">${SECTION_INFO[s.id][1]}</p></div>
+          <button data-move="${s.id}" data-dir="-1" class="btn btn-ghost !px-2" ${i === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+          <button data-move="${s.id}" data-dir="1" class="btn btn-ghost !px-2" ${i === cards.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
+          ${toggle(s)}</div>`).join("")}</div>
+      <p class="text-sm text-slate-500 mt-5 mb-2">Extras</p>
+      <div class="divide-y divide-slate-100">${secs.filter((s) => FEATURE_IDS.includes(s.id)).map((s) => `
+        <div class="flex items-center gap-3 py-2.5">
+          <div class="flex-1 min-w-0"><p class="text-sm font-medium text-slate-900">${SECTION_INFO[s.id][0]}</p>
+            <p class="text-xs text-slate-500">${SECTION_INFO[s.id][1]}</p>
+            ${s.id === "leave_by" && s.on ? `<label class="mt-2 flex items-center gap-2 text-xs text-slate-600">Travel time
+              <input data-travel inputmode="numeric" class="input !w-16 !py-1 text-right" value="${state.prefs.travel_minutes}"> min</label>` : ""}</div>
+          ${toggle(s)}</div>`).join("")}</div>`;
+  };
+  const save = async (sections) => { await savePrefs({ sections }); draw(); };
+  el.addEventListener("click", async (e) => {
+    const t = e.target.closest("[data-toggle]");
+    const m = e.target.closest("[data-move]");
+    if (t) await save(state.prefs.sections.map((s) => s.id === t.dataset.toggle ? { ...s, on: !s.on } : s));
+    if (m) {
+      const list = [...state.prefs.sections];
+      const cards = list.filter((s) => !FEATURE_IDS.includes(s.id));
+      const i = cards.findIndex((s) => s.id === m.dataset.move), j = i + Number(m.dataset.dir);
+      [cards[i], cards[j]] = [cards[j], cards[i]];
+      await save([...cards, ...list.filter((s) => FEATURE_IDS.includes(s.id))]);
+    }
+  });
+  el.addEventListener("change", async (e) => {
+    if (!e.target.matches("[data-travel]")) return;
+    const v = Math.max(0, Math.min(180, parseInt(e.target.value, 10) || 0));
+    await savePrefs({ travel_minutes: v });
+    toast(`Leave-by uses ${v} min of travel`);
+    draw();
+  });
+  draw();
+}
+
 async function sectionMorning(el) {
   let m = await api("/api/morning");
   const draw = () => {
@@ -715,6 +957,7 @@ async function sectionMorning(el) {
 async function viewSettings(root, params) {
   const sections = [
     { id: "appearance", title: "Appearance", summary: () => themeLabel(Theme.choice), init: sectionAppearance },
+    { id: "sections", title: "Sections", summary: () => `${state.prefs.sections?.filter((s) => s.on).length || 0} of ${state.prefs.sections?.length || 0} on`, init: sectionSections },
     { id: "you", title: "You and the weather", summary: () => [state.prefs.name, state.prefs.place?.name].filter(Boolean).join(" · "), init: sectionYou },
     { id: "calendars", title: "Calendars", summary: () => state.prefs.hidden_calendars?.length ? `${state.prefs.hidden_calendars.length} hidden` : "All shown", init: sectionCalendars },
     { id: "morning", title: "Every morning", summary: () => "", init: sectionMorning },
@@ -786,7 +1029,7 @@ async function render() {
 
 window.addEventListener("hashchange", render);
 // Keep the brief fresh: every 5 minutes, and whenever the window comes back.
-setInterval(() => { if (parseHash().route === "today" && $("#modal").classList.contains("hidden")) render(); }, 5 * 60 * 1000);
+setInterval(() => { if (parseHash().route === "today" && $("#modal").classList.contains("hidden") && !focus.session && !document.activeElement?.matches("input")) render(); }, 5 * 60 * 1000);
 window.addEventListener("focus", () => { if (parseHash().route === "today" && Date.now() - (state.lastFocus || 0) > 60000) { state.lastFocus = Date.now(); render(); } });
 
 (async function start() {

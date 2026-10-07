@@ -1,6 +1,7 @@
 """FastAPI application: JSON API under /api, the interface at /."""
 import sqlite3
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -27,8 +28,33 @@ THEMES = Literal["auto", "light", "dark", "sand", "ocean", "lavender", "rose", "
 
 
 @app.get("/api/brief")
-def get_brief(db: sqlite3.Connection = Depends(get_db)):
-    return brief.build(db)
+def get_brief(view: str | None = None, db: sqlite3.Connection = Depends(get_db)):
+    return brief.build(db, view=view)
+
+
+class Top3Item(BaseModel):
+    position: int = Field(ge=1, le=3)
+    text: str = Field("", max_length=120)
+    done: bool = False
+
+
+class Top3In(BaseModel):
+    date: date
+    items: list[Top3Item]
+
+
+@app.put("/api/top3")
+def save_top3(body: Top3In, db: sqlite3.Connection = Depends(get_db)):
+    day = body.date.isoformat()
+    for it in body.items:
+        if it.text.strip():
+            db.execute("INSERT INTO top3 (date, position, text, done) VALUES (?, ?, ?, ?) "
+                       "ON CONFLICT(date, position) DO UPDATE SET text = excluded.text, done = excluded.done",
+                       (day, it.position, it.text.strip(), int(it.done)))
+        else:
+            db.execute("DELETE FROM top3 WHERE date = ? AND position = ?", (day, it.position))
+    db.commit()
+    return brief.top3(db, body.date)
 
 
 @app.post("/api/calendar/access")
@@ -45,8 +71,15 @@ def list_calendars(db: sqlite3.Connection = Depends(get_db)):
 
 # --- preferences -------------------------------------------------------------
 
+class SectionIn(BaseModel):
+    id: str
+    on: bool
+
+
 class PrefsIn(BaseModel):
     name: str | None = Field(None, max_length=40)
+    sections: list[SectionIn] | None = None
+    travel_minutes: int | None = Field(None, ge=0, le=180)
     theme: THEMES | None = None
     hidden_calendars: list[str] | None = None
     place: dict | None = None
@@ -68,6 +101,10 @@ def update_prefs(body: PrefsIn, db: sqlite3.Connection = Depends(get_db)):
         changes["place"] = {"name": str(p["name"])[:60], "lat": float(p["lat"]), "lon": float(p["lon"])}
     if "name" in changes:
         changes["name"] = changes["name"].strip()
+    if "sections" in changes:
+        valid = brief.SECTIONS + brief.FEATURES
+        if sorted(s["id"] for s in changes["sections"]) != sorted(valid):
+            raise HTTPException(422, "Send every section once")
     prefs.update(changes)
     set_setting(db, "prefs", prefs)
     db.commit()
