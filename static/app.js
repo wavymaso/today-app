@@ -510,18 +510,47 @@ async function endFocus(done, finished = false) {
    Revision: exams and the timetable
    ======================================================================== */
 
-const EXAM_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#8b5cf6", "#e34948", "#eda100", "#e87ba4", "#184f95"];
-const examColor = (id) => EXAM_COLORS[(id - 1) % EXAM_COLORS.length];
+/* --- Course colours ----------------------------------------------------------
+   One colour per course, so a course's midterm, final and sessions match. The
+   eight hues are a palette checked for colour-blind readers, with their own
+   steps for dark themes; they always sit next to the course name. */
+const COURSE_HUES = {
+  light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"],
+  dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
+};
 const DIFFICULTY = { 1: "Easy", 2: "Medium", 3: "Hard" };
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const courseOf = (x) => x.course || x.subject;
+const palette = { byCourse: new Map() };
+
+/** Courses get colours in the order they were added, and keep them. */
+function assignCourseColors(exams) {
+  const hues = COURSE_HUES[document.documentElement.dataset.mode === "dark" ? "dark" : "light"];
+  palette.byCourse = new Map();
+  for (const x of [...exams].sort((a, b) => a.id - b.id)) {
+    const c = courseOf(x);
+    if (!palette.byCourse.has(c)) palette.byCourse.set(c, hues[palette.byCourse.size % hues.length]);
+  }
+  palette.byExam = new Map(exams.map((x) => [x.id, palette.byCourse.get(courseOf(x))]));
+}
+const examColor = (id) => palette.byExam?.get(id) || "rgb(var(--slate-400))";
+
+const monthLong = new Intl.DateTimeFormat("en-GB", { month: "long" });
+const monthShortFmt = new Intl.DateTimeFormat("en-GB", { month: "short" });
+const dayDiff = (a, b) => Math.round((parseLocal(b + "T00:00") - parseLocal(a + "T00:00")) / 86400000);
+const sessionMinutes = (s) => Math.round((parseLocal(s.end) - parseLocal(s.start)) / 60000);
+const countdown = (days) => days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`;
 
 function examForm(exam = null) {
   const f = document.createElement("form");
   f.className = "space-y-4";
   f.innerHTML = `
-    <div><label class="label">Subject</label><input name="subject" class="input" maxlength="60" placeholder="e.g. Statistics" value="${esc(exam?.subject || "")}" required></div>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div><label class="label">What</label><input name="subject" class="input" maxlength="60" placeholder="e.g. Statistics midterm" value="${esc(exam?.subject || "")}" required></div>
+      <div><label class="label">Course <span class="font-normal text-slate-400">(groups its exams)</span></label><input name="course" class="input" maxlength="80" placeholder="e.g. Statistics" value="${esc(exam?.course || "")}"></div>
+    </div>
     <div class="grid grid-cols-2 gap-3">
-      <div><label class="label">Exam date</label><input name="date" type="date" class="input" value="${exam?.date || ""}" required></div>
+      <div><label class="label">Date</label><input name="date" type="date" class="input" value="${exam?.date || ""}" required></div>
       <div><label class="label">Time <span class="font-normal text-slate-400">(optional)</span></label><input name="time" type="time" class="input" value="${exam?.time || ""}"></div>
     </div>
     <div><label class="label">How hard is it for you?</label>
@@ -532,14 +561,18 @@ function examForm(exam = null) {
     <details ${exam?.hours ? "open" : ""}><summary class="cursor-pointer list-none text-sm text-slate-500 hover:text-slate-900 inline-flex items-center gap-1">
       <span data-chevron class="inline-block transition-transform">›</span> Set the hours yourself</summary>
       <div class="mt-2 w-32"><input name="hours" inputmode="decimal" class="input text-right" placeholder="e.g. 12" value="${exam?.hours || ""}"></div></details>
-    <button class="btn btn-primary w-full py-2.5">${exam ? "Save" : "Add exam"}</button>`;
+    ${exam?.notes ? `<p class="text-xs text-slate-500 leading-relaxed border-l-2 border-slate-200 pl-3">${esc(exam.notes)}</p>` : ""}
+    <div class="flex gap-2">
+      <button class="btn btn-primary flex-1 py-2.5">${exam ? "Save" : "Add exam"}</button>
+      ${exam ? `<button type="button" data-delete class="btn btn-ghost text-red-600 hover:bg-red-50">Delete</button>` : ""}
+    </div>`;
   $("[data-diff]", f).addEventListener("click", (e) => {
     const b = e.target.closest("[data-d]");
     if (!b) return;
     f.difficulty.value = b.dataset.d;
     $$("[data-d]", f).forEach((x) => { const on = x === b; x.classList.toggle("border-accent", on); x.classList.toggle("bg-accent/10", on); x.classList.toggle("text-slate-900", on); x.classList.toggle("border-slate-200", !on); x.classList.toggle("text-slate-600", !on); });
   });
-  f.values = () => ({ subject: f.subject.value.trim(), date: f.date.value, time: f.time.value || null,
+  f.values = () => ({ subject: f.subject.value.trim(), course: f.course.value.trim() || null, date: f.date.value, time: f.time.value || null,
                       difficulty: Number(f.difficulty.value), hours: f.hours.value ? Number(f.hours.value.replace(",", ".")) : (exam ? 0 : null) });
   return f;
 }
@@ -549,17 +582,203 @@ function openExamForm(exam, after) {
   f.addEventListener("submit", async (e) => {
     e.preventDefault();
     const v = f.values();
-    if (!v.subject || !v.date) return toast("Add the subject and the date", "error");
+    if (!v.subject || !v.date) return toast("Add what it is and the date", "error");
     try {
       await api(exam ? `/api/revision/exams/${exam.id}` : "/api/revision/exams", { method: exam ? "PATCH" : "POST", body: v });
       closeModal();
-      toast(exam ? "Exam updated. Replan to use the change." : `Added ${v.subject}`);
+      toast(exam ? "Saved. Replan to use the change." : `Added ${v.subject}`);
       after();
     } catch (err) { toast(err.message, "error"); }
   });
-  openModal(exam ? "Edit exam" : "Add an exam", f);
-  setTimeout(() => f.subject.focus(), 50);
+  $("[data-delete]", f)?.addEventListener("click", async (e) => {
+    if (e.target.dataset.armed !== "1") { e.target.dataset.armed = "1"; e.target.textContent = "Tap again to delete"; return; }
+    await api(`/api/revision/exams/${exam.id}`, { method: "DELETE" });
+    closeModal();
+    toast(`Deleted ${exam.subject}`);
+    after();
+  });
+  openModal(exam ? exam.subject : "Add an exam", f);
+  if (!exam) setTimeout(() => f.subject.focus(), 50);
 }
+
+/* --- The semester runway: one line from today to the last exam -------------- */
+
+function runway(exams, todayIso) {
+  const ahead = exams.filter((x) => x.date >= todayIso).sort((a, b) => a.date.localeCompare(b.date));
+  if (!ahead.length) return "";
+  const last = ahead.at(-1).date;
+  const span = Math.max(14, dayDiff(todayIso, last));
+  const x = (iso) => 3 + (dayDiff(todayIso, iso) / span) * 94;             // keep 3% breathing room each side
+  // Exams close together share one label ("6 exams · 10–18 Dec").
+  const groups = [];
+  for (const e of ahead) {
+    const g = groups.at(-1);
+    if (g && x(e.date) - x(g.items[0].date) < 7) g.items.push(e);
+    else groups.push({ items: [e] });
+  }
+  const ticks = [];
+  const d = parseLocal(todayIso + "T00:00");
+  for (let m = new Date(d.getFullYear(), d.getMonth() + 1, 1); isoDay(m) <= last; m = new Date(m.getFullYear(), m.getMonth() + 1, 1)) ticks.push(isoDay(m));
+  let row = 0;
+  const labels = groups.map((g) => {
+    const a = g.items[0], b = g.items.at(-1);
+    const left = (x(a.date) + x(b.date)) / 2;
+    const text = g.items.length === 1 ? a.subject
+      : `${g.items.length} exams · ${parseLocal(a.date + "T00:00").getDate()}–${parseLocal(b.date + "T00:00").getDate()} ${monthShortFmt.format(parseLocal(b.date + "T00:00"))}`;
+    const anchor = left > 82 ? "right" : left < 14 ? "left" : "center";
+    row = 1 - row;
+    const pos = anchor === "right" ? `right:${100 - left}%;transform:translateX(50%)` : anchor === "left" ? `left:${left}%;transform:translateX(-12px)` : `left:${left}%;transform:translateX(-50%)`;
+    return `<span class="hidden sm:inline absolute ${row ? "top-[18px]" : "top-[34px]"} whitespace-nowrap text-[12px] ${g.items.length > 1 ? "font-semibold text-slate-900" : "text-slate-600"}" style="${pos}">${esc(text)}</span>
+      <span class="hidden sm:block absolute w-px bg-slate-300" style="left:${left}%;top:${row ? 36 : 52}px;height:${row ? 22 : 6}px"></span>`;
+  }).join("");
+  return `<section class="mt-10" aria-label="Exams from today to ${esc(fmt.dayMonth.format(parseLocal(last + "T00:00")))}">
+    <div class="relative h-[104px] -mt-12 sm:mt-0 select-none">
+      <span class="absolute left-0 right-0 top-[64px] h-px bg-slate-300"></span>
+      ${ticks.map((t) => `<span class="absolute top-[60px] h-[9px] w-px bg-slate-300" style="left:${x(t)}%"></span>
+        <span class="absolute top-[78px] text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400" style="left:${x(t)}%;transform:translateX(-50%)">${monthShortFmt.format(parseLocal(t + "T00:00"))}</span>`).join("")}
+      ${labels}
+      <span class="absolute top-[59px] w-[11px] h-[11px] rounded-full bg-accent" style="left:${x(todayIso)}%;transform:translateX(-50%)"></span>
+      <span class="absolute top-[78px] text-[10px] font-semibold uppercase tracking-[0.16em] text-accent" style="left:${x(todayIso)}%;transform:translateX(-30%)">Today</span>
+      ${ahead.map((e) => `<span title="${esc(e.subject)} · ${esc(fmt.short.format(parseLocal(e.date + "T00:00")))}" class="absolute top-[60px] w-[9px] h-[9px] rounded-full ring-2 ring-slate-50"
+        style="left:${x(e.date)}%;transform:translateX(-50%);background:${examColor(e.id)}"></span>`).join("")}
+    </div>
+  </section>`;
+}
+
+/* --- Exams, as an editorial list grouped by month -------------------------- */
+
+function examRow(x) {
+  const date = parseLocal(x.date + "T00:00");
+  const color = examColor(x.id);
+  const weight = (x.notes || "").match(/^(\d+%)/)?.[1];
+  const pctDone = Math.min(100, (x.done_minutes / x.target_minutes) * 100);
+  const pctPlanned = Math.min(100 - pctDone, (x.planned_minutes / x.target_minutes) * 100);
+  const meta = [x.course && x.course !== x.subject ? x.course : null, x.time, DIFFICULTY[x.difficulty]].filter(Boolean);
+  const over = x.planned_minutes + x.done_minutes > x.target_minutes + 60;
+  return `<li><button data-exam="${x.id}" class="group w-full grid grid-cols-[3.25rem_1fr_auto] gap-x-4 items-center text-left py-4 border-b border-slate-200/70 hover:bg-slate-100/60 -mx-3 px-3 rounded-xl transition">
+    <span class="text-center">
+      <span class="display block text-[2rem] font-semibold leading-none text-slate-900">${date.getDate()}</span>
+      <span class="block text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400 mt-1.5">${WEEKDAYS[(date.getDay() + 6) % 7]}</span></span>
+    <span class="min-w-0">
+      <span class="flex items-center gap-2"><span class="w-2 h-2 rounded-full shrink-0" style="background:${color}"></span>
+        <span class="font-medium text-slate-900 truncate">${esc(x.subject)}</span>
+        ${weight ? `<span class="text-[11px] tabular text-slate-500 border border-slate-200 rounded-full px-1.5 leading-[18px] shrink-0">${weight}</span>` : ""}</span>
+      <span class="block text-xs text-slate-500 truncate mt-1 pl-4">${esc(meta.join(" · "))}</span>
+      <span class="mt-2.5 ml-4 h-[3px] rounded-full bg-slate-200/80 overflow-hidden flex max-w-[16rem]">
+        <span style="width:${pctDone}%;background:${color}"></span><span style="width:${pctPlanned}%;background:${color};opacity:.35"></span></span>
+      ${x.short_minutes > 0 ? `<span class="block text-xs text-amber-700 mt-1.5 pl-4">${duration(x.short_minutes)} doesn't fit yet: allow more hours a day</span>`
+        : over ? `<span class="block text-xs text-slate-500 mt-1.5 pl-4">More planned than it needs now. Replan to update.</span>` : ""}
+    </span>
+    <span class="text-right">
+      <span class="block text-sm text-slate-900 tabular whitespace-nowrap">${x.days === 0 ? "Today" : x.days === 1 ? "Tomorrow" : `${x.days} days`}</span>
+      <span class="block text-xs text-slate-400 tabular whitespace-nowrap mt-0.5">${duration(x.target_minutes)}${x.done_minutes ? ` · ${duration(x.done_minutes)} done` : ""}</span></span>
+  </button></li>`;
+}
+
+function examList(exams) {
+  const ahead = exams.filter((x) => x.days >= 0);
+  const past = exams.filter((x) => x.days < 0);
+  const months = new Map();
+  for (const x of ahead) {
+    const k = x.date.slice(0, 7);
+    if (!months.has(k)) months.set(k, []);
+    months.get(k).push(x);
+  }
+  return `${[...months].map(([k, list]) => `
+    <div class="mt-8 first:mt-2">
+      <h3 class="flex items-baseline gap-3 mb-1"><span class="display text-2xl font-semibold text-slate-900">${monthLong.format(parseLocal(k + "-01T00:00"))}</span>
+        <span class="text-xs text-slate-400">${plural(list.length, "exam", "exams")}</span></h3>
+      <ol>${list.map(examRow).join("")}</ol>
+    </div>`).join("")}
+    ${past.length ? `<details class="mt-6"><summary class="cursor-pointer list-none link inline-flex items-center gap-1"><span data-chevron class="inline-block transition-transform">›</span> ${plural(past.length, "exam", "exams")} done</summary>
+      <ol class="opacity-60 mt-2">${past.map(examRow).join("")}</ol></details>` : ""}`;
+}
+
+/* --- The timetable, week by week ---------------------------------------------- */
+
+function weekTimetable(st, weeksShown) {
+  const todayIso = isoDay(new Date());
+  const items = st.sessions.filter((s) => s.start.slice(0, 10) >= todayIso || s.status === "planned");
+  if (!items.length) return "";
+  const monday = (iso) => { const d = parseLocal(iso + "T00:00"); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return isoDay(d); };
+  const lastIso = [...items.map((s) => s.start.slice(0, 10)), ...st.exams.filter((x) => x.days >= 0).map((x) => x.date)].sort().at(-1);
+  const weeks = [];
+  for (let w = monday(todayIso); w <= lastIso; ) {
+    weeks.push(w);
+    const d = parseLocal(w + "T00:00"); d.setDate(d.getDate() + 7); w = isoDay(d);
+  }
+  const examsOn = (iso) => st.exams.filter((x) => x.date === iso);
+  const sessOn = (iso) => items.filter((s) => s.start.slice(0, 10) === iso);
+  const chip = (s) => {
+    const c = examColor(s.exam_id);
+    const state = s.status === "done" ? "opacity-50 line-through" : s.status === "missed" ? "opacity-40" : "";
+    return `<button data-sess="${s.id}" class="block w-full text-left rounded-md pl-2.5 pr-1.5 py-1.5 transition hover:brightness-95 ${state}"
+        style="background:color-mix(in srgb, ${c} 13%, transparent);box-shadow:inset 2.5px 0 0 ${c}">
+      <span class="block text-[11px] tabular text-slate-500 leading-tight">${hm(s.start)} <span class="text-slate-400">· ${duration(sessionMinutes(s))}</span></span>
+      <span class="block text-[12px] font-medium text-slate-900 leading-snug line-clamp-2">${esc(s.subject)}</span>
+      ${s.kind === "review" ? `<span class="block text-[10px] uppercase tracking-wider text-slate-500 mt-0.5">Review</span>` : ""}</button>`;
+  };
+  const examChip = (x) => `<button data-exam="${x.id}" class="block w-full text-left rounded-md px-2 py-1.5 border-[1.5px] bg-surface" style="border-color:${examColor(x.id)}">
+      <span class="block text-[10px] font-bold uppercase tracking-[0.14em]" style="color:${examColor(x.id)}">Exam${x.time ? ` · ${x.time}` : ""}</span>
+      <span class="block text-[12px] font-semibold text-slate-900 leading-snug line-clamp-2">${esc(x.subject)}</span></button>`;
+
+  return weeks.slice(0, weeksShown).map((w) => {
+    const days = [...Array(7)].map((_, i) => { const d = parseLocal(w + "T00:00"); d.setDate(d.getDate() + i); return isoDay(d); });
+    const mins = days.flatMap(sessOn).filter((s) => s.status !== "missed").reduce((a, s) => a + sessionMinutes(s), 0);
+    const first = parseLocal(days[0] + "T00:00"), last = parseLocal(days[6] + "T00:00");
+    const range = first.getMonth() === last.getMonth() ? `${first.getDate()} – ${last.getDate()} ${monthLong.format(last)}`
+      : `${first.getDate()} ${monthShortFmt.format(first)} – ${last.getDate()} ${monthShortFmt.format(last)}`;
+    const nExams = days.flatMap(examsOn).length;
+    return `<div class="mt-10 first:mt-4">
+      <div class="flex items-baseline justify-between gap-3 pb-3">
+        <h3 class="display text-xl font-semibold text-slate-900">${w === monday(todayIso) ? "This week" : range}${w === monday(todayIso) ? ` <span class="text-sm font-normal text-slate-400 ml-1">${range}</span>` : ""}</h3>
+        <span class="text-xs text-slate-500 tabular">${mins ? duration(mins) : "No study"}${nExams ? ` · ${plural(nExams, "exam", "exams")}` : ""}</span></div>
+      <div class="hidden sm:grid grid-cols-7 border-t border-l border-slate-200/80 rounded-xl overflow-hidden">
+        ${days.map((iso, i) => {
+          const isToday = iso === todayIso, past = iso < todayIso, d = parseLocal(iso + "T00:00");
+          return `<div class="border-r border-b border-slate-200/80 p-1.5 min-h-[8.5rem] ${past ? "bg-slate-100/50" : ""}">
+            <div class="flex items-baseline justify-between px-1 pb-1.5">
+              <span class="text-[10px] font-semibold uppercase tracking-[0.14em] ${isToday ? "text-accent" : "text-slate-400"}">${WEEKDAYS[i]}</span>
+              <span class="text-[13px] tabular ${isToday ? "inline-flex w-6 h-6 -my-1 items-center justify-center rounded-full bg-accent text-on-accent font-semibold" : past ? "text-slate-400" : "text-slate-700"}">${d.getDate()}</span></div>
+            <div class="space-y-1">${examsOn(iso).map(examChip).join("")}${sessOn(iso).map(chip).join("")}</div></div>`;
+        }).join("")}
+      </div>
+      <div class="sm:hidden border-t border-slate-200/80">${days.filter((iso) => examsOn(iso).length || sessOn(iso).length).map((iso) => {
+          const d = parseLocal(iso + "T00:00");
+          return `<div class="grid grid-cols-[3rem_1fr] gap-3 py-3 border-b border-slate-200/80">
+            <div class="text-center pt-0.5"><span class="display block text-xl font-semibold leading-none ${iso === todayIso ? "text-accent" : "text-slate-900"}">${d.getDate()}</span>
+              <span class="block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 mt-1">${WEEKDAYS[(d.getDay() + 6) % 7]}</span></div>
+            <div class="space-y-1.5">${examsOn(iso).map(examChip).join("")}${sessOn(iso).map(chip).join("")}</div></div>`;
+        }).join("") || `<p class="py-4 text-sm text-slate-400">A free week.</p>`}</div>
+    </div>`;
+  }).join("") + (weeks.length > weeksShown ? `<div class="text-center mt-8"><button data-more-weeks class="btn btn-secondary">Show ${plural(weeks.length - weeksShown, "more week", "more weeks")}</button></div>` : "");
+}
+
+/** Tap a session: start it, tick it off, or take it out. */
+function openSessionMenu(s, after) {
+  const todayIso = isoDay(new Date());
+  const past = parseLocal(s.end) <= new Date();
+  const body = document.createElement("div");
+  body.innerHTML = `
+    <p class="text-sm text-slate-500 -mt-2">${esc(relDay(s.start))} · ${hm(s.start)}–${hm(s.end)} · ${duration(sessionMinutes(s))}${s.kind === "review" ? " · review" : ""}</p>
+    <div class="grid gap-2 mt-5">
+      ${s.start.slice(0, 10) === todayIso && !past && s.status === "planned" ? `<button data-act="focus" class="btn btn-primary py-2.5">Start focus timer</button>` : ""}
+      ${s.status !== "done" ? `<button data-act="done" class="btn btn-secondary py-2.5">Mark as done</button>` : `<button data-act="planned" class="btn btn-secondary py-2.5">Not done after all</button>`}
+      ${s.status === "planned" && past ? `<button data-act="missed" class="btn btn-secondary py-2.5">I missed it</button>` : ""}
+      <button data-act="remove" class="btn btn-ghost text-red-600 hover:bg-red-50">Remove this session</button>
+    </div>`;
+  body.addEventListener("click", async (e) => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (!act) return;
+    closeModal();
+    if (act === "focus") return startFocus(s);
+    if (act === "remove") { await api(`/api/revision/sessions/${s.id}`, { method: "DELETE" }); toast("Session removed"); }
+    else { await api(`/api/revision/sessions/${s.id}`, { method: "PATCH", body: { status: act } }); toast(act === "done" ? "Nice work." : act === "missed" ? "Marked as missed. Replan to make up for it." : "Saved"); }
+    after();
+  });
+  openModal(s.subject, body);
+}
+
 
 /** Import a class's key dates (shipped with the app, or a .json file someone shares). */
 async function openImport(after) {
@@ -618,60 +837,6 @@ async function openImport(after) {
   openModal("Import key dates", body);
 }
 
-function examCard(x, synced) {
-  const pctDone = Math.min(100, (x.done_minutes / x.target_minutes) * 100);
-  const pctPlanned = Math.min(100 - pctDone, (x.planned_minutes / x.target_minutes) * 100);
-  const past = x.days < 0;
-  return `<article class="card p-5 ${past ? "opacity-60" : ""}">
-    <div class="flex items-start gap-3">
-      <span class="w-1.5 self-stretch rounded-full" style="background:${examColor(x.id)}"></span>
-      <div class="flex-1 min-w-0">
-        <div class="flex items-start justify-between gap-2">
-          <div class="min-w-0"><h3 class="font-semibold text-slate-900 truncate">${esc(x.subject)}</h3>
-            <p class="text-xs text-slate-500 mt-0.5">${fmt.short.format(parseLocal(x.date + "T00:00"))}${x.time ? ` · ${x.time}` : ""} · ${DIFFICULTY[x.difficulty]}</p></div>
-          <div class="text-right shrink-0">${past ? `<span class="text-xs text-slate-400">Done</span>`
-            : `<span class="display text-2xl font-semibold text-slate-900">${x.days}</span><span class="text-xs text-slate-500"> ${x.days === 1 ? "day" : "days"}</span>`}</div>
-        </div>
-        <div class="mt-3 h-2 rounded-full bg-slate-100 overflow-hidden flex" title="Done and planned hours">
-          <div style="width:${pctDone}%;background:${examColor(x.id)}"></div>
-          <div style="width:${pctPlanned}%;background:${examColor(x.id)};opacity:.3"></div></div>
-        <div class="flex flex-wrap justify-between gap-x-3 gap-y-1 mt-2 text-xs text-slate-500">
-          <span>${x.done_minutes ? `${duration(x.done_minutes)} done · ` : "Not started · "}${duration(x.planned_minutes)} planned of ${duration(x.target_minutes)}</span>
-          <span class="flex gap-3"><button data-edit-exam="${x.id}" class="hover:text-slate-900">Edit</button>
-            <button data-del-exam="${x.id}" class="hover:text-red-600">Delete</button></span>
-        </div>
-        ${!past && x.planned_minutes + x.done_minutes > x.target_minutes + 60 ? `<p class="text-xs text-slate-500 mt-2">More is planned than this exam needs now. Replan to update.</p>` : ""}
-        ${x.short_minutes > 0 && !past ? `<p class="text-xs text-amber-700 mt-2">${duration(x.short_minutes)} doesn't fit before the exam. Allow more hours a day, or fewer days off.</p>` : ""}
-      </div>
-    </div></article>`;
-}
-
-function planList(sessions) {
-  const upcoming = sessions.filter((s) => !s.past || s.status === "planned");
-  if (!upcoming.length) return "";
-  const byDay = new Map();
-  for (const s of upcoming) {
-    const k = s.start.slice(0, 10);
-    if (!byDay.has(k)) byDay.set(k, []);
-    byDay.get(k).push(s);
-  }
-  return [...byDay].slice(0, 21).map(([day, list]) => `
-    <div class="flex gap-4 py-3 border-t border-slate-100 first:border-0">
-      <div class="w-20 shrink-0"><p class="text-sm font-medium text-slate-900">${relDay(day)}</p>
-        <p class="text-xs text-slate-400">${duration(list.reduce((a, s) => a + (parseLocal(s.end) - parseLocal(s.start)) / 60000, 0))}</p></div>
-      <ul class="flex-1 min-w-0 space-y-1.5">${list.map((s) => `
-        <li class="flex items-center gap-2.5 text-sm ${s.status !== "planned" ? "opacity-50" : ""}">
-          <span class="w-2 h-2 rounded-full shrink-0" style="background:${examColor(s.exam_id)}"></span>
-          <span class="tabular text-slate-500 w-[5.5rem] shrink-0">${hm(s.start)}–${hm(s.end)}</span>
-          <span class="flex-1 min-w-0 truncate text-slate-800">${esc(s.subject)}${s.kind === "review" ? ` <span class="text-xs text-slate-400">review</span>` : ""}</span>
-          ${s.status === "done" ? `<span class="text-xs text-emerald-600">Done</span>` : s.status === "missed" ? `<span class="text-xs text-slate-400">Missed</span>`
-            : s.past ? sessionButtons(s.id)
-            : s.start.slice(0, 10) === isoDay(new Date()) ? `<button data-focus="${s.id}" class="btn btn-primary !px-3 !py-1 text-xs shrink-0">Start</button>`
-            : s.event_id ? `<span class="text-slate-400" title="In your calendar">${svg(ICON.check, "w-4 h-4")}</span>` : ""}
-        </li>`).join("")}</ul>
-    </div>`).join("");
-}
-
 function settingsForm(st) {
   const s = st.settings;
   return `
@@ -691,8 +856,12 @@ function settingsForm(st) {
     </form>`;
 }
 
+let revisionTab = null;   // remembered while the app is open
+
 async function viewRevision(root, params) {
   let st = await api("/api/revision");
+  let weeksShown = 3;
+  let tab = revisionTab || null;
 
   async function replan(quiet = false) {
     try {
@@ -701,20 +870,25 @@ async function viewRevision(root, params) {
       if (!quiet) toast(st.settings.synced ? "Plan updated in your calendar" : `Planned ${plural(st.sessions.filter((s) => !s.past).length, "session", "sessions")}`);
     } catch (err) { toast(err.message, "error"); }
   }
+  async function reload() { st = await api("/api/revision"); draw(); }
 
   function draw() {
     state.sessions = st.sessions;
-    const upcomingExams = st.exams.filter((x) => x.days >= 0);
-    const hasPlan = st.sessions.some((s) => !s.past && s.status === "planned");
+    assignCourseColors(st.exams);
+    const todayIso = isoDay(new Date());
+    const ahead = st.exams.filter((x) => x.days >= 0).sort((a, b) => a.date.localeCompare(b.date));
+    const planned = st.sessions.filter((s) => !s.past && s.status === "planned");
+    const hasPlan = planned.length > 0;
     const inCalendar = st.settings.synced;
-    const totalPlanned = st.sessions.filter((s) => !s.past && s.status === "planned").reduce((a, s) => a + (parseLocal(s.end) - parseLocal(s.start)) / 60000, 0);
+    const plannedMin = planned.reduce((a, s) => a + sessionMinutes(s), 0);
+    tab = tab || (hasPlan ? "plan" : "exams");
+
     if (!st.exams.length) {
       root.innerHTML = `
-        <section class="hero card p-8 sm:p-10 text-center max-w-xl mx-auto">
-          <span class="inline-flex w-12 h-12 rounded-2xl bg-accent text-on-accent items-center justify-center">${svg(ICON.book, "w-6 h-6")}</span>
-          <h1 class="display text-3xl font-semibold text-slate-900 mt-4">Plan your revision</h1>
-          <p class="text-sm text-slate-500 mt-2 mb-6">Add your exams. Today fits study sessions into the free time in your calendar,
-            gives harder subjects more time, and adds a review the day before each exam.</p>
+        <section class="max-w-xl mx-auto text-center pt-10">
+          <p class="eyebrow">Revision</p>
+          <h1 class="display text-5xl font-semibold text-slate-900 mt-3 leading-[1.05]">Plan the semester<br><span class="text-slate-400">before it plans you.</span></h1>
+          <p class="text-slate-500 mt-5 mb-8 leading-relaxed">Add your exams. Today fits study sessions into the free time in your calendar, gives harder subjects more of it, and saves a review for the day before each exam.</p>
           <div class="flex flex-col sm:flex-row gap-2 justify-center">
             <button data-import class="btn btn-primary">Import your class's key dates</button>
             <button data-add-exam class="btn btn-secondary">Add an exam yourself</button></div>
@@ -723,43 +897,56 @@ async function viewRevision(root, params) {
       $("[data-import]", root).addEventListener("click", () => openImport(reload));
       return;
     }
+
+    const next = ahead[0], after = ahead[1];
+    const span = ahead.length ? dayDiff(todayIso, ahead.at(-1).date) : 0;
     root.innerHTML = `
-      <div class="flex flex-wrap items-end justify-between gap-3 mb-5">
-        <div><p class="eyebrow">Revision</p>
-          <h1 class="display text-3xl font-semibold text-slate-900 mt-1">${upcomingExams.length ? plural(upcomingExams.length, "exam", "exams") + " ahead" : "All exams done"}</h1></div>
-        <div class="flex gap-2"><button data-import class="btn btn-ghost">Import key dates</button>
-          <button data-add-exam class="btn btn-secondary">+ Add exam</button></div>
-      </div>
-      <div class="grid sm:grid-cols-2 gap-4">${st.exams.map((x) => examCard(x, inCalendar)).join("")}</div>
-
-      <section class="card p-5 sm:p-6 mt-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div><h2 class="font-semibold text-slate-900">Your timetable</h2>
-            <p class="text-sm text-slate-500 mt-0.5">${hasPlan ? `${duration(Math.round(totalPlanned))} of study planned${inCalendar ? ` · in your <b>${esc(st.calendar?.title || "calendar")}</b> calendar` : " · not in your calendar yet"}`
-              : "Make a plan to see it here."}</p></div>
-          <div class="flex flex-wrap gap-2">
-            <button data-plan class="btn ${hasPlan ? "btn-secondary" : "btn-primary"}">${hasPlan ? "Replan" : "Make my plan"}</button>
-            ${hasPlan && !inCalendar ? `<button data-sync class="btn btn-primary">Add to calendar</button>` : ""}
-            ${inCalendar ? `<button data-unsync class="btn btn-ghost">Remove from calendar</button>` : ""}
-          </div>
+      <header class="flex flex-wrap items-end justify-between gap-6 pt-2">
+        <div class="max-w-2xl">
+          <p class="eyebrow">Revision</p>
+          <h1 class="display text-5xl sm:text-6xl font-semibold text-slate-900 mt-3 leading-[1.02]">
+            ${ahead.length ? `${plural(ahead.length, "exam", "exams")},<br class="sm:hidden"> <span class="text-slate-400">${plural(span, "day", "days")}.</span>` : "All done."}</h1>
+          ${next ? `<p class="text-slate-600 mt-4 leading-relaxed">Next is <b class="text-slate-900">${esc(next.subject)}</b> ${countdown(next.days)}${next.time ? ` at ${next.time}` : ""}${after ? `, then ${esc(after.subject)} ${countdown(after.days)}` : ""}.</p>` : ""}
         </div>
-        ${hasPlan && !inCalendar ? `<p class="text-xs text-slate-500 mt-3">Have a look first. Nothing goes into your calendar until you tap Add to calendar.</p>` : ""}
-        ${inCalendar && st.calendar && !st.calendar.separate ? `<p class="text-xs text-slate-500 mt-3">Your calendar account doesn't allow new calendars from the Mac, so sessions are in “${esc(st.calendar.title)}”, marked 📚.</p>` : ""}
-        <div class="mt-4">${planList(st.sessions)}</div>
-      </section>
+        <div class="flex gap-2">
+          <button data-import class="btn btn-ghost">Import key dates</button>
+          <button data-add-exam class="btn btn-secondary">Add exam</button></div>
+      </header>
 
-      <details class="card mt-4 group" ${params.get("open") === "prefs" ? "open" : ""}>
-        <summary class="flex items-center justify-between px-5 py-4 cursor-pointer list-none">
-          <span><span class="block font-medium text-slate-900">Study preferences</span>
-            <span class="block text-sm text-slate-500">Up to ${st.settings.hours_per_day} h a day · ${st.settings.earliest}–${st.settings.latest}${st.settings.days_off.length ? ` · off ${st.settings.days_off.map((d) => WEEKDAYS[d]).join(", ")}` : ""}</span></span>
-          <span data-chevron class="inline-block text-slate-400 text-xl transition-transform">›</span></summary>
-        <div class="px-5 pb-5">${settingsForm(st)}
-          <p class="text-xs text-slate-400 mt-3">Changes are used the next time you replan.</p></div>
-      </details>`;
+      ${runway(st.exams, todayIso)}
+
+      <nav class="mt-6 flex items-center gap-6 border-b border-slate-200" role="tablist">
+        ${[["plan", "Timetable", hasPlan ? duration(plannedMin) : ""], ["exams", "Exams", String(ahead.length)]].map(([id, label, n]) => `
+          <button role="tab" data-tab="${id}" aria-selected="${tab === id}" class="relative -mb-px pb-3 text-sm ${tab === id ? "text-slate-900 font-medium" : "text-slate-500 hover:text-slate-800"}">
+            ${label}${n ? ` <span class="ml-1 text-xs tabular ${tab === id ? "text-slate-500" : "text-slate-400"}">${n}</span>` : ""}
+            ${tab === id ? `<span class="absolute left-0 right-0 bottom-0 h-[2px] bg-slate-900 rounded-full"></span>` : ""}</button>`).join("")}
+      </nav>
+
+      ${tab === "exams" ? `<section class="max-w-3xl mt-4">${examList(st.exams)}</section>` : `
+        <section>
+          <div class="flex flex-wrap items-center justify-between gap-3 mt-5">
+            <p class="text-sm text-slate-600">${hasPlan ? `${duration(plannedMin)} of study ahead${inCalendar ? ` · in your <b class="text-slate-900">${esc(st.calendar?.title || "")}</b> calendar` : " · not in your calendar yet"}` : "No plan yet."}</p>
+            <div class="flex flex-wrap gap-2">
+              <button data-plan class="btn ${hasPlan ? "btn-ghost" : "btn-primary"} !py-1.5">${hasPlan ? "Replan" : "Make my plan"}</button>
+              ${hasPlan && !inCalendar ? `<button data-sync class="btn btn-primary !py-1.5">Add to calendar</button>` : ""}
+              ${inCalendar ? `<button data-unsync class="btn btn-ghost !py-1.5 text-slate-500">Remove from calendar</button>` : ""}
+            </div>
+          </div>
+          ${hasPlan && !inCalendar ? `<p class="text-xs text-slate-500 mt-2">Have a look first. Nothing goes into your calendar until you tap Add to calendar.</p>` : ""}
+          ${inCalendar && st.calendar && !st.calendar.separate ? `<p class="text-xs text-slate-500 mt-2">Your calendar account doesn't allow new calendars from the Mac, so sessions are in “${esc(st.calendar.title)}”.</p>` : ""}
+          ${hasPlan ? weekTimetable(st, weeksShown) : `<p class="text-sm text-slate-500 py-14 text-center">Make a plan and your weeks appear here.</p>`}
+          <details data-prefs class="mt-10 border-t border-slate-200" ${params.get("open") === "prefs" ? "open" : ""}>
+            <summary class="flex items-center justify-between py-4 cursor-pointer list-none">
+              <span><span class="block text-sm font-medium text-slate-900">Study preferences</span>
+                <span class="block text-xs text-slate-500 mt-0.5">Up to ${st.settings.hours_per_day} h a day · ${st.settings.earliest}–${st.settings.latest}${st.settings.days_off.length ? ` · off ${st.settings.days_off.map((d) => WEEKDAYS[d]).join(", ")}` : ""}</span></span>
+              <span data-chevron class="inline-block text-slate-400 text-xl transition-transform">›</span></summary>
+            <div class="pb-4 max-w-2xl">${settingsForm(st)}<p class="text-xs text-slate-400 mt-3">Used the next time you replan.</p></div>
+          </details>
+        </section>`}`;
 
     $("[data-add-exam]", root).addEventListener("click", () => openExamForm(null, reload));
     $("[data-import]", root).addEventListener("click", () => openImport(reload));
-    $("[data-plan]", root).addEventListener("click", () => replan());
+    $("[data-plan]", root)?.addEventListener("click", () => replan());
     $("[data-sync]", root)?.addEventListener("click", async (e) => {
       e.target.disabled = true;
       try { st = await api("/api/revision/calendar", { method: "POST" }); draw(); toast(`Added ${plural(st.added, "session", "sessions")} to your calendar`); }
@@ -771,6 +958,7 @@ async function viewRevision(root, params) {
       toast(`Removed ${plural(st.removed, "session", "sessions")} from your calendar. The plan is still here.`);
     });
     const study = $("[data-study]", root);
+    if (!study) return;
     const saveStudy = async (body) => {
       try { st = await api("/api/revision/settings", { method: "PUT", body }); toast("Saved"); }
       catch (err) { toast(err.message, "error"); }
@@ -788,26 +976,20 @@ async function viewRevision(root, params) {
       const off = st.settings.days_off.includes(d) ? st.settings.days_off.filter((x) => x !== d) : [...st.settings.days_off, d];
       await saveStudy({ days_off: off });
       draw();
-      $("details", root).open = true;
+      $("[data-prefs]", root).open = true;
     });
   }
 
-  async function reload() { st = await api("/api/revision"); draw(); }
-
-  root.addEventListener("click", async (e) => {
-    const edit = e.target.closest("[data-edit-exam]");
-    const del = e.target.closest("[data-del-exam]");
-    if (edit) openExamForm(st.exams.find((x) => x.id === Number(edit.dataset.editExam)), reload);
-    if (del) {
-      const x = st.exams.find((x) => x.id === Number(del.dataset.delExam));
-      if (!confirm(`Delete ${x.subject}? Its upcoming sessions are removed too.`)) return;
-      st = await api(`/api/revision/exams/${x.id}`, { method: "DELETE" });
-      draw();
-      toast(`Deleted ${x.subject}`);
-    }
+  root.addEventListener("click", (e) => {
+    const ex = e.target.closest("[data-exam]");
+    const se = e.target.closest("[data-sess]");
+    if (ex) openExamForm(st.exams.find((x) => x.id === Number(ex.dataset.exam)), reload);
+    if (se) openSessionMenu(st.sessions.find((s) => s.id === Number(se.dataset.sess)), reload);
+    if (e.target.closest("[data-more-weeks]")) { weeksShown += 6; draw(); }
+    const t = e.target.closest("[data-tab]");
+    if (t) { tab = revisionTab = t.dataset.tab; draw(); }
   });
   wireSessionButtons(root);
-  wireFocusButtons(root);
   draw();
   if (params.get("replan")) replan();
 }
@@ -1090,6 +1272,8 @@ async function render() {
 }
 
 window.addEventListener("hashchange", render);
+// Course colours have their own shades in dark themes.
+window.addEventListener("themechange", () => { if (parseHash().route === "revision" && !focus.session) render(); });
 // Keep the brief fresh: every 5 minutes, and whenever the window comes back.
 setInterval(() => { if (parseHash().route === "today" && $("#modal").classList.contains("hidden") && !focus.session && !document.activeElement?.matches("input")) render(); }, 5 * 60 * 1000);
 window.addEventListener("focus", () => { if (parseHash().route === "today" && Date.now() - (state.lastFocus || 0) > 60000) { state.lastFocus = Date.now(); render(); } });

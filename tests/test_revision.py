@@ -124,6 +124,7 @@ def test_import_key_dates_skips_ones_you_have(client):
     assert (maths["difficulty"], maths["hours"]) == (3, 25)          # yours stays as you set it
     ads = next(x for x in r["exams"] if x["subject"] == "A&DS midterm")
     assert ads["difficulty"] == 2 and ads["time"] == "11:30" and ads["notes"].startswith("25%, T-03.04. Sessions 1-14")
+    assert ads["course"] == "Algorithms & Data Structures"
     assert client.post("/api/revision/import", json={"items": spanish}).json()["added"] == 0   # importing twice adds nothing
 
 
@@ -131,3 +132,19 @@ def test_import_validation(client):
     assert client.post("/api/revision/import", json={"items": []}).status_code == 422
     assert client.post("/api/revision/import", json={"items": [{"subject": "X", "date": "nope"}]}).status_code == 422
     assert client.post("/api/revision/import", json={"items": [{"subject": "X", "date": "2026-12-01", "time": "9am"}]}).status_code == 422
+
+
+def test_older_databases_get_courses_filled_in(tmp_path, monkeypatch):
+    import sqlite3
+    from app import config, db
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "old.db")
+    old = sqlite3.connect(tmp_path / "old.db")   # an exams table from before courses existed
+    old.executescript("CREATE TABLE exams (id INTEGER PRIMARY KEY, subject TEXT NOT NULL, date TEXT NOT NULL, time TEXT, "
+                      "difficulty INTEGER NOT NULL DEFAULT 2, hours REAL, notes TEXT, created_at TEXT);"
+                      "INSERT INTO exams (subject, date, difficulty, hours) VALUES ('A&DS midterm', '2026-10-15', 2, 12), ('My own test', '2026-11-01', 1, NULL);")
+    old.commit(); old.close()
+    db.init_db()
+    c = db.connect()
+    rows = {r["subject"]: (r["course"], r["hours"]) for r in c.execute("SELECT * FROM exams")}
+    c.close()
+    assert rows == {"A&DS midterm": ("Algorithms & Data Structures", 12), "My own test": (None, None)}

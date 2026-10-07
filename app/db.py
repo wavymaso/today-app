@@ -80,9 +80,32 @@ def init_db() -> None:
     try:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript(SCHEMA)
+        _upgrade(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _upgrade(conn: sqlite3.Connection) -> None:
+    """Columns newer versions need, added to a database made by an older one."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(exams)")}
+    if "course" not in cols:
+        conn.execute("ALTER TABLE exams ADD COLUMN course TEXT")   # e.g. "Algorithms & Data Structures"
+        _fill_courses(conn)
+
+
+def _fill_courses(conn: sqlite3.Connection) -> None:
+    """Exams added before courses existed: take the course from a bundled key-dates
+    list when the name and date match."""
+    for f in (config.STATIC_DIR / "key-dates").glob("*.json"):
+        try:
+            items = json.loads(f.read_text(encoding="utf-8"))["items"]
+        except Exception:
+            continue
+        for i in items:
+            if i.get("course"):
+                conn.execute("UPDATE exams SET course = ? WHERE course IS NULL AND lower(subject) = lower(?) AND date = ?",
+                             (i["course"], i["subject"], i["date"]))
 
 
 def get_setting(conn: sqlite3.Connection, key: str, default=None):

@@ -50,6 +50,7 @@ class SettingsIn(BaseModel):
 
 class ExamIn(BaseModel):
     subject: str = Field(min_length=1, max_length=60)
+    course: str | None = Field(None, max_length=80)
     date: Date
     time: str | None = None
     difficulty: int = Field(2, ge=1, le=3)
@@ -61,6 +62,7 @@ class ExamIn(BaseModel):
 
 class ExamPatch(BaseModel):
     subject: str | None = Field(None, min_length=1, max_length=60)
+    course: str | None = Field(None, max_length=80)
     date: Date | None = None
     time: str | None = None
     difficulty: int | None = Field(None, ge=1, le=3)
@@ -174,8 +176,9 @@ def update_settings(body: SettingsIn, db: sqlite3.Connection = Depends(get_db)):
 
 @router.post("/exams", status_code=201)
 def add_exam(body: ExamIn, db: sqlite3.Connection = Depends(get_db)):
-    db.execute("INSERT INTO exams (subject, date, time, difficulty, hours, notes) VALUES (?, ?, ?, ?, ?, ?)",
-               (body.subject.strip(), body.date.isoformat(), body.time, body.difficulty, body.hours, body.notes))
+    db.execute("INSERT INTO exams (subject, course, date, time, difficulty, hours, notes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+               (body.subject.strip(), (body.course or "").strip() or None, body.date.isoformat(), body.time,
+                body.difficulty, body.hours, body.notes))
     db.commit()
     return state(db)
 
@@ -264,8 +267,8 @@ def import_key_dates(body: ImportIn, db: sqlite3.Connection = Depends(get_db)):
         if (k.subject.lower(), k.date.isoformat()) in existing:
             skipped += 1
             continue
-        db.execute("INSERT INTO exams (subject, date, time, difficulty, notes) VALUES (?, ?, ?, 2, ?)",
-                   (k.subject.strip(), k.date.isoformat(), k.time, _key_date_notes(k)))
+        db.execute("INSERT INTO exams (subject, course, date, time, difficulty, notes) VALUES (?, ?, ?, ?, 2, ?)",
+                   (k.subject.strip(), (k.course or "").strip() or None, k.date.isoformat(), k.time, _key_date_notes(k)))
         existing.add((k.subject.lower(), k.date.isoformat()))
         added += 1
     db.commit()
